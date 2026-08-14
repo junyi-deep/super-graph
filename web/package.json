@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build && cp -R node_modules/@excalidraw/excalidraw/dist/excalidraw-assets ../internal/frontend/dist/excalidraw-assets",
+    "build": "tsc -b && vite build && node scripts/copy-excalidraw-assets.mjs",
     "test": "vitest run"
   },
   "dependencies": {

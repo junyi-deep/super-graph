@@ -55,6 +55,22 @@ dist/super-graph
 
 构建使用 `CGO_ENABLED=0`，生产机器不需要额外运行时。
 
+### Windows PowerShell 构建
+
+在 Windows PowerShell 5.1 或 PowerShell 7 中运行：
+
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass
+.\scripts\build.ps1
+```
+
+默认生成 `dist\super-graph-windows-amd64.exe`。也可以构建 Windows ARM64，或指定输出位置：
+
+```powershell
+.\scripts\build.ps1 -Architecture arm64
+.\scripts\build.ps1 -OutputPath .\dist\super-graph.exe
+```
+
 ## 启动
 
 无需指定端口或数据目录：
@@ -101,6 +117,19 @@ make test
 ```
 
 前端开发服务器会把 `/api`、`/image` 和协作 WebSocket 代理到后端。
+
+Windows 下可用一个 PowerShell 脚本同时启动前后端：
+
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass
+.\scripts\dev.ps1
+```
+
+脚本会在首次运行时安装前端依赖，后端配置默认写入项目目录的 `.s-graph\config.json`。按 `Ctrl+C` 会同时停止前后端进程。也可以指定开发配置：
+
+```powershell
+.\scripts\dev.ps1 -ConfigPath .\local\config.json
+```
 
 ## 分享图片
 
