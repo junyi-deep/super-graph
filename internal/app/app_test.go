@@ -103,6 +103,35 @@ func (c *testClient) autosaveContent(id, scene string, png []byte) int {
 	return resp.StatusCode
 }
 
+func TestSafeRequestSupportsReverseProxyOrigin(t *testing.T) {
+	tests := []struct {
+		name           string
+		origin         string
+		host           string
+		forwardedProto string
+		forwardedHost  string
+		want           bool
+	}{
+		{name: "direct", origin: "http://graph.internal", host: "graph.internal", want: true},
+		{name: "proxy", origin: "https://graph.example.com", host: "127.0.0.1:7988", forwardedProto: "https", forwardedHost: "graph.example.com", want: true},
+		{name: "proxy default port", origin: "https://graph.example.com", host: "127.0.0.1:7988", forwardedProto: "https", forwardedHost: "graph.example.com:443", want: true},
+		{name: "forwarded chain", origin: "https://graph.example.com", host: "127.0.0.1:7988", forwardedProto: "https, http", forwardedHost: "graph.example.com, proxy.local", want: true},
+		{name: "cross site", origin: "https://evil.example", host: "graph.example.com", forwardedProto: "https", forwardedHost: "graph.example.com", want: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodPost, "http://"+test.host+"/api/drawings", nil)
+			r.Host = test.host
+			r.Header.Set("Origin", test.origin)
+			r.Header.Set("X-Forwarded-Proto", test.forwardedProto)
+			r.Header.Set("X-Forwarded-Host", test.forwardedHost)
+			if got := safeRequest(r); got != test.want {
+				t.Fatalf("safeRequest() = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
 func TestMermaidDrawingAndFallbackImage(t *testing.T) {
 	a, s := newTestApp(t, t.TempDir())
 	defer s.Close()
