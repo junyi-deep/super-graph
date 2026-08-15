@@ -1,5 +1,61 @@
-import { describe,expect,it } from "vitest";
-import { canShowDelete,groupDrawings,recentDrawings } from "./directory";
-const base={id:"1",name:"n",updatedBy:null,createdAt:0,updatedAt:0,imageUrl:"/x",scene:undefined,space:"user" as const,folderId:null,projectId:null,type:"excalidraw" as const};
-describe("directory",()=>{it("groups by owner",()=>{const grouped=groupDrawings([{...base,owner:{id:"a",username:"alice"},canDelete:true},{...base,id:"2",owner:{id:"b",username:"bob"},canDelete:false}]);expect(Object.keys(grouped)).toEqual(["alice","bob"])});it("uses server permission for delete",()=>{expect(canShowDelete({...base,owner:{id:"a",username:"alice"},canDelete:false})).toBe(false)})});
-describe("recentDrawings",()=>{it("returns only the current user's edits ordered newest first",()=>{const alice={id:"1",username:"alice"},bob={id:"2",username:"bob"};const drawings=[{id:"old",owner:alice,updatedBy:alice,updatedAt:10},{id:"new",owner:bob,updatedBy:alice,updatedAt:30},{id:"other",owner:bob,updatedBy:bob,updatedAt:40}] as any;expect(recentDrawings(drawings,"1").map(item=>item.id)).toEqual(["new","old"])})});
+import { describe, expect, it } from "vitest";
+import { canShowDelete, groupDrawings, recentDrawings } from "./directory";
+const base = {
+  id: "1",
+  name: "n",
+  updatedBy: null,
+  createdAt: 0,
+  updatedAt: 0,
+  imageUrl: "/x",
+  scene: undefined,
+  space: "user" as const,
+  folderId: null,
+  projectId: null,
+  type: "excalidraw" as const,
+  favorite: false,
+  collaborationEnabled: true,
+  collaboratorLimit: 16,
+  canEdit: true,
+};
+describe("directory", () => {
+  it("groups by owner", () => {
+    const grouped = groupDrawings([
+      {
+        ...base,
+        owner: { id: "a", username: "alice", isAdmin: false, blocked: false },
+        canDelete: true,
+      },
+      {
+        ...base,
+        id: "2",
+        owner: { id: "b", username: "bob", isAdmin: false, blocked: false },
+        canDelete: false,
+      },
+    ]);
+    expect(Object.keys(grouped)).toEqual(["alice", "bob"]);
+  });
+  it("uses server permission for delete", () => {
+    expect(
+      canShowDelete({
+        ...base,
+        owner: { id: "a", username: "alice", isAdmin: false, blocked: false },
+        canDelete: false,
+      }),
+    ).toBe(false);
+  });
+});
+describe("recentDrawings", () => {
+  it("returns only the current user's edits ordered newest first", () => {
+    const alice = { id: "1", username: "alice" },
+      bob = { id: "2", username: "bob" };
+    const drawings = [
+      { id: "old", owner: alice, updatedBy: alice, updatedAt: 10 },
+      { id: "new", owner: bob, updatedBy: alice, updatedAt: 30 },
+      { id: "other", owner: bob, updatedBy: bob, updatedAt: 40 },
+    ] as any;
+    expect(recentDrawings(drawings, "1").map((item) => item.id)).toEqual([
+      "new",
+      "old",
+    ]);
+  });
+});

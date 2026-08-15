@@ -34,7 +34,7 @@ func main() {
 		os.Exit(2)
 	}
 	dataDir := cfg.Resolve(cfg.DataDir)
-	a, err := app.Open(app.Config{DataDir: dataDir, SessionDays: cfg.SessionDays, AutosaveInterval: duration, MaxUploadSize: cfg.MaxUploadSize}, logger)
+	a, err := app.Open(app.Config{DataDir: dataDir, SessionDays: cfg.SessionDays, AutosaveInterval: duration, MaxUploadSize: cfg.MaxUploadSize, ConfigPath: cfg.ConfigPath(), AdminPassword: cfg.AdminPassword, MaxDocumentEditors: cfg.MaxDocumentEditors, MaxProjectEditors: cfg.MaxProjectEditors, MaxGlobalEditors: cfg.MaxGlobalEditors, DefaultDrawingLimit: cfg.DefaultDrawingLimit}, logger)
 	if err != nil {
 		logger.Error("startup failed", "error", err)
 		os.Exit(1)

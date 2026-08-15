@@ -14,7 +14,7 @@ func TestLoadCreatesDefaultsAndResolvesPaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Port != 7988 || cfg.LogRetentionDays != 30 {
+	if cfg.Port != 7988 || cfg.LogRetentionDays != 30 || cfg.AdminPassword == "" || cfg.DefaultDrawingLimit != 16 {
 		t.Fatalf("unexpected defaults: %+v", cfg)
 	}
 	if cfg.Resolve(cfg.DataDir) != filepath.Join(base, ".s-graph", "data") {

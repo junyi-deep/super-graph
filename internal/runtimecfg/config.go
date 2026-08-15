@@ -19,19 +19,29 @@ type Config struct {
 	SessionDays         int    `json:"sessionDays"`
 	AutosaveInterval    string `json:"autosaveInterval"`
 	MaxUploadSize       int64  `json:"maxUploadSize"`
+	AdminPassword       string `json:"adminPassword"`
+	MaxDocumentEditors  int    `json:"maxDocumentEditors"`
+	MaxProjectEditors   int    `json:"maxProjectEditors"`
+	MaxGlobalEditors    int    `json:"maxGlobalEditors"`
+	DefaultDrawingLimit int    `json:"defaultDrawingLimit"`
 	configPath          string
 	executableDirectory string
 }
 
 func Defaults() Config {
 	return Config{
-		Port:             7988,
-		DataDir:          ".s-graph/data",
-		LogDir:           ".s-graph/logs",
-		LogRetentionDays: 30,
-		SessionDays:      30,
-		AutosaveInterval: "3s",
-		MaxUploadSize:    32 << 20,
+		Port:                7988,
+		DataDir:             ".s-graph/data",
+		LogDir:              ".s-graph/logs",
+		LogRetentionDays:    30,
+		SessionDays:         30,
+		AutosaveInterval:    "3s",
+		MaxUploadSize:       32 << 20,
+		AdminPassword:       "admin123456",
+		MaxDocumentEditors:  32,
+		MaxProjectEditors:   128,
+		MaxGlobalEditors:    512,
+		DefaultDrawingLimit: 16,
 	}
 }
 
@@ -91,8 +101,33 @@ func Load(path string) (Config, error) {
 	if cfg.MaxUploadSize <= 0 {
 		cfg.MaxUploadSize = 32 << 20
 	}
+	if cfg.AdminPassword == "" {
+		return Config{}, fmt.Errorf("adminPassword is required")
+	}
+	if cfg.MaxDocumentEditors <= 0 {
+		cfg.MaxDocumentEditors = 32
+	}
+	if cfg.MaxProjectEditors <= 0 {
+		cfg.MaxProjectEditors = 128
+	}
+	if cfg.MaxGlobalEditors <= 0 {
+		cfg.MaxGlobalEditors = 512
+	}
+	if cfg.DefaultDrawingLimit <= 0 || cfg.DefaultDrawingLimit > cfg.MaxDocumentEditors {
+		cfg.DefaultDrawingLimit = min(16, cfg.MaxDocumentEditors)
+	}
 	if _, err = time.ParseDuration(cfg.AutosaveInterval); err != nil {
 		return Config{}, fmt.Errorf("invalid autosaveInterval: %w", err)
+	}
+	normalized, marshalErr := json.MarshalIndent(cfg, "", "  ")
+	if marshalErr != nil {
+		return Config{}, marshalErr
+	}
+	normalized = append(normalized, '\n')
+	if string(normalized) != string(data) {
+		if err = os.WriteFile(path, normalized, 0o640); err != nil {
+			return Config{}, fmt.Errorf("persist normalized config %s: %w", path, err)
+		}
 	}
 	cfg.configPath = path
 	cfg.executableDirectory = filepath.Dir(filepath.Dir(path))

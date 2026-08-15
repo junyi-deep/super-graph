@@ -6,13 +6,17 @@ Super Graph 是面向可信公司内网的轻量图表协作与分享服务，�
 
 ## 功能截图
 
+### 首页
+
+![首页](docs/screenshots/home.png)
+
 ### Excalidraw 实时协作画板
 
-![Excalidraw 编辑器](docs/screenshots/excalidraw-editor.jpg)
+![Excalidraw 编辑器](docs/screenshots/excalidraw.png)
 
 ### Mermaid + Visimer 可视化编辑器
 
-![Mermaid Visimer 编辑器](docs/screenshots/mermaid-editor.jpg)
+![Mermaid Visimer 编辑器](docs/screenshots/mermaid.png)
 
 ## 项目优势
 
@@ -27,7 +31,7 @@ Super Graph 是面向可信公司内网的轻量图表协作与分享服务，�
 
 ## 核心功能
 
-- 用户名直接登录和 SQLite session cookie
+- 用户名密码登录、管理员控制台和 SQLite session cookie
 - 用户空间、项目空间与多级文件树
 - 项目、目录和文件的创建、重命名与安全删除
 - 文件创建时间、最近修改时间、创建人和最近修改人
@@ -102,11 +106,18 @@ Set-ExecutionPolicy -Scope Process Bypass
   "logRetentionDays": 30,
   "sessionDays": 30,
   "autosaveInterval": "3s",
-  "maxUploadSize": 33554432
+  "maxUploadSize": 33554432,
+  "adminPassword": "admin123456",
+  "maxDocumentEditors": 32,
+  "maxProjectEditors": 128,
+  "maxGlobalEditors": 512,
+  "defaultDrawingLimit": 16
 }
 ```
 
-相对路径均以可执行文件所在目录为基准。修改配置后重启服务生效。开发或测试时可通过 `SUPER_GRAPH_CONFIG` 环境变量指定另一份配置文件。
+普通用户首次登录的默认密码是 `123456`，登录后可以自行修改。管理员用户名固定为 `admin`，密码由 `adminPassword` 配置，也可以在页面修改并持久化回配置文件。首次使用前请修改管理员默认密码。
+
+相对路径均以可执行文件所在目录为基准。端口和路径配置修改后重启服务生效；协作上限与管理员密码可通过管理员页面动态修改。开发或测试时可通过 `SUPER_GRAPH_CONFIG` 环境变量指定另一份配置文件。
 
 ## 开发与测试
 
@@ -171,9 +182,9 @@ Visimer 保留 Mermaid 文本作为唯一事实来源，可视化操作会转换
 
 ## 安全说明
 
-用户名直接登录只是身份标签，不提供强身份验证，仅适用于可信内网。任何人都能输入已有用户名并取得该身份；正式接入不可信网络前应替换为 SSO 或密码认证。
+普通用户密码使用随机盐和 PBKDF2-SHA256 存储，管理员密码由仅限服务账号读取的配置文件管理。管理员可以拉黑用户、重置密码、删除用户及资源并调整全局协作上限；仍建议在更大规模或不可信网络环境中接入企业 SSO。
 
-实现包含随机 session token、HttpOnly/SameSite cookie、参数化 SQL、上传大小限制、PNG 签名检查和 owner 删除权限。为兼容企业代理和 Proxy SwitchyOmega，HTTP API 与协作 WebSocket 不校验 Origin/Referer；因此本服务仍应仅部署在可信内网。部署到 HTTPS 反向代理后正确传递 `X-Forwarded-Proto: https` 时，cookie 会自动设置 `Secure`。
+实现包含随机 session token、HttpOnly/SameSite cookie、参数化 SQL、上传大小限制、PNG 签名检查、服务端只读协作约束和 owner/admin 删除权限。为兼容企业代理和 Proxy SwitchyOmega，HTTP API 与协作 WebSocket 不校验 Origin/Referer；因此仍建议部署在受控网络并使用 HTTPS。部署到 HTTPS 反向代理后正确传递 `X-Forwarded-Proto: https` 时，cookie 会自动设置 `Secure`。
 
 ### 反向代理
 

@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/junyi-deep/super-graph/internal/collaboration"
@@ -36,39 +37,62 @@ var (
 )
 
 type Config struct {
-	DataDir          string
-	SessionDays      int
-	AutosaveInterval time.Duration
-	MaxUploadSize    int64
+	DataDir             string
+	SessionDays         int
+	AutosaveInterval    time.Duration
+	MaxUploadSize       int64
+	ConfigPath          string
+	AdminPassword       string
+	MaxDocumentEditors  int
+	MaxProjectEditors   int
+	MaxGlobalEditors    int
+	DefaultDrawingLimit int
+}
+
+type GlobalSettings struct {
+	MaxDocumentEditors  int `json:"maxDocumentEditors"`
+	MaxProjectEditors   int `json:"maxProjectEditors"`
+	MaxGlobalEditors    int `json:"maxGlobalEditors"`
+	DefaultDrawingLimit int `json:"defaultDrawingLimit"`
 }
 
 type App struct {
-	db        *sql.DB
-	cfg       Config
-	imagesDir string
-	log       *slog.Logger
-	collab    collaboration.Server
-	static    http.Handler
+	db            *sql.DB
+	cfg           Config
+	imagesDir     string
+	log           *slog.Logger
+	collab        collaboration.Server
+	static        http.Handler
+	settingsMu    sync.RWMutex
+	settings      GlobalSettings
+	adminPassword string
 }
 
 type User struct {
 	ID       string `json:"id"`
 	Username string `json:"username"`
+	IsAdmin  bool   `json:"isAdmin"`
+	Blocked  bool   `json:"blocked"`
 }
 type Drawing struct {
-	ID        string          `json:"id"`
-	Name      string          `json:"name"`
-	Owner     User            `json:"owner"`
-	UpdatedBy *User           `json:"updatedBy"`
-	Scene     json.RawMessage `json:"scene,omitempty"`
-	CreatedAt int64           `json:"createdAt"`
-	UpdatedAt int64           `json:"updatedAt"`
-	CanDelete bool            `json:"canDelete"`
-	ImageURL  string          `json:"imageUrl"`
-	Space     string          `json:"space"`
-	FolderID  *string         `json:"folderId"`
-	ProjectID *string         `json:"projectId"`
-	Type      string          `json:"type"`
+	ID                   string          `json:"id"`
+	Name                 string          `json:"name"`
+	Owner                User            `json:"owner"`
+	UpdatedBy            *User           `json:"updatedBy"`
+	Scene                json.RawMessage `json:"scene,omitempty"`
+	CreatedAt            int64           `json:"createdAt"`
+	UpdatedAt            int64           `json:"updatedAt"`
+	CanDelete            bool            `json:"canDelete"`
+	ImageURL             string          `json:"imageUrl"`
+	Space                string          `json:"space"`
+	FolderID             *string         `json:"folderId"`
+	ProjectID            *string         `json:"projectId"`
+	Type                 string          `json:"type"`
+	Favorite             bool            `json:"favorite"`
+	CollaborationEnabled bool            `json:"collaborationEnabled"`
+	CollaboratorLimit    int             `json:"collaboratorLimit"`
+	CanEdit              bool            `json:"canEdit"`
+	SortOrder            float64         `json:"sortOrder"`
 }
 
 func Open(cfg Config, logger *slog.Logger) (*App, error) {
@@ -83,6 +107,21 @@ func Open(cfg Config, logger *slog.Logger) (*App, error) {
 	}
 	if cfg.MaxUploadSize <= 0 {
 		cfg.MaxUploadSize = 32 << 20
+	}
+	if cfg.AdminPassword == "" {
+		cfg.AdminPassword = "admin123456"
+	}
+	if cfg.MaxDocumentEditors <= 0 {
+		cfg.MaxDocumentEditors = 32
+	}
+	if cfg.MaxProjectEditors <= 0 {
+		cfg.MaxProjectEditors = 128
+	}
+	if cfg.MaxGlobalEditors <= 0 {
+		cfg.MaxGlobalEditors = 512
+	}
+	if cfg.DefaultDrawingLimit <= 0 || cfg.DefaultDrawingLimit > cfg.MaxDocumentEditors {
+		cfg.DefaultDrawingLimit = min(16, cfg.MaxDocumentEditors)
 	}
 	if logger == nil {
 		logger = slog.Default()
@@ -100,12 +139,16 @@ func Open(cfg Config, logger *slog.Logger) (*App, error) {
 		db.Close()
 		return nil, err
 	}
+	if err = initializeUsers(db); err != nil {
+		db.Close()
+		return nil, err
+	}
 	dist, err := fs.Sub(frontend.Dist, "dist")
 	if err != nil {
 		db.Close()
 		return nil, err
 	}
-	return &App{db: db, cfg: cfg, imagesDir: images, log: logger, static: http.FileServer(http.FS(dist))}, nil
+	return &App{db: db, cfg: cfg, imagesDir: images, log: logger, static: http.FileServer(http.FS(dist)), adminPassword: cfg.AdminPassword, settings: GlobalSettings{MaxDocumentEditors: cfg.MaxDocumentEditors, MaxProjectEditors: cfg.MaxProjectEditors, MaxGlobalEditors: cfg.MaxGlobalEditors, DefaultDrawingLimit: cfg.DefaultDrawingLimit}}, nil
 }
 
 func (a *App) SetCollaboration(s collaboration.Server) { a.collab = s }
@@ -148,7 +191,25 @@ INSERT INTO schema_migrations(version, applied_at) VALUES (2, unixepoch());`
 ALTER TABLE drawings ADD COLUMN drawing_type TEXT NOT NULL DEFAULT 'excalidraw' CHECK(drawing_type IN ('excalidraw','mermaid'));
 CREATE INDEX idx_drawings_type ON drawings(drawing_type);
 INSERT INTO schema_migrations(version, applied_at) VALUES (3, unixepoch());`
-	return applyMigration(db, 3, v3)
+	if err := applyMigration(db, 3, v3); err != nil {
+		return err
+	}
+	const v4 = `
+ALTER TABLE users ADD COLUMN password_salt TEXT NOT NULL DEFAULT '';
+ALTER TABLE users ADD COLUMN password_hash TEXT NOT NULL DEFAULT '';
+ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE users ADD COLUMN blocked INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE projects ADD COLUMN sort_order REAL NOT NULL DEFAULT 0;
+ALTER TABLE folders ADD COLUMN sort_order REAL NOT NULL DEFAULT 0;
+ALTER TABLE drawings ADD COLUMN sort_order REAL NOT NULL DEFAULT 0;
+ALTER TABLE drawings ADD COLUMN collaboration_enabled INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE drawings ADD COLUMN collaborator_limit INTEGER NOT NULL DEFAULT 16;
+CREATE TABLE favorites (user_id TEXT NOT NULL, drawing_id TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY(user_id,drawing_id), FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE, FOREIGN KEY(drawing_id) REFERENCES drawings(id) ON DELETE CASCADE);
+CREATE TABLE drawing_permissions (drawing_id TEXT NOT NULL, user_id TEXT NOT NULL, can_edit INTEGER NOT NULL, updated_at INTEGER NOT NULL, PRIMARY KEY(drawing_id,user_id), FOREIGN KEY(drawing_id) REFERENCES drawings(id) ON DELETE CASCADE, FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE);
+CREATE TABLE drawing_activity (id INTEGER PRIMARY KEY AUTOINCREMENT, drawing_id TEXT NOT NULL, user_id TEXT NOT NULL, changed_at INTEGER NOT NULL, FOREIGN KEY(drawing_id) REFERENCES drawings(id) ON DELETE CASCADE, FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE);
+CREATE INDEX idx_drawing_activity_recent ON drawing_activity(drawing_id,changed_at DESC);
+INSERT INTO schema_migrations(version, applied_at) VALUES (4, unixepoch());`
+	return applyMigration(db, 4, v4)
 }
 
 func applyMigration(db *sql.DB, version int, statements string) error {
@@ -182,12 +243,22 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		a.withUser(w, r, a.logout)
 	case p == "/api/me" && r.Method == http.MethodGet:
 		a.withUser(w, r, a.me)
+	case p == "/api/password" && r.Method == http.MethodPatch:
+		a.withUser(w, r, a.changePassword)
 	case p == "/api/config" && r.Method == http.MethodGet:
 		a.config(w, r)
+	case p == "/api/admin/settings":
+		a.withUser(w, r, a.adminSettings)
+	case strings.HasPrefix(p, "/api/admin/users/"):
+		a.withUser(w, r, func(w http.ResponseWriter, r *http.Request, u User) {
+			a.adminUserRoute(w, r, u, strings.TrimPrefix(p, "/api/admin/users/"))
+		})
 	case p == "/api/users" && r.Method == http.MethodGet:
 		a.withUser(w, r, a.users)
 	case p == "/api/tree" && r.Method == http.MethodGet:
 		a.withUser(w, r, a.tree)
+	case p == "/api/tree/reorder" && r.Method == http.MethodPatch:
+		a.withUser(w, r, a.reorderTree)
 	case p == "/api/stats" && r.Method == http.MethodGet:
 		a.withUser(w, r, a.stats)
 	case p == "/api/folders" && r.Method == http.MethodPost:
@@ -257,13 +328,14 @@ func (a *App) currentUser(r *http.Request) (User, error) {
 		return User{}, err
 	}
 	var u User
-	err = a.db.QueryRowContext(r.Context(), `SELECT u.id,u.username FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.id=? AND s.expires_at>?`, c.Value, time.Now().Unix()).Scan(&u.ID, &u.Username)
+	err = a.db.QueryRowContext(r.Context(), `SELECT u.id,u.username,u.is_admin,u.blocked FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.id=? AND s.expires_at>? AND u.blocked=0`, c.Value, time.Now().Unix()).Scan(&u.ID, &u.Username, &u.IsAdmin, &u.Blocked)
 	return u, err
 }
 
 func (a *App) login(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Username string `json:"username"`
+		Password string `json:"password"`
 	}
 	if !decodeJSON(w, r, &in) {
 		return
@@ -275,13 +347,37 @@ func (a *App) login(w http.ResponseWriter, r *http.Request) {
 	}
 	now := time.Now().Unix()
 	var u User
-	err := a.db.QueryRowContext(r.Context(), "SELECT id,username FROM users WHERE username=?", in.Username).Scan(&u.ID, &u.Username)
+	var salt, digest string
+	err := a.db.QueryRowContext(r.Context(), "SELECT id,username,is_admin,blocked,password_salt,password_hash FROM users WHERE username=?", in.Username).Scan(&u.ID, &u.Username, &u.IsAdmin, &u.Blocked, &salt, &digest)
 	if errors.Is(err, sql.ErrNoRows) {
+		if in.Username == "admin" || in.Password != defaultUserPassword {
+			writeError(w, http.StatusUnauthorized, "首次登录请使用默认密码 123456")
+			return
+		}
 		u = User{ID: newID(), Username: in.Username}
-		_, err = a.db.ExecContext(r.Context(), "INSERT INTO users(id,username,created_at,last_seen_at) VALUES(?,?,?,?)", u.ID, u.Username, now, now)
+		salt, digest, err = newPassword(defaultUserPassword)
+		if err == nil {
+			_, err = a.db.ExecContext(r.Context(), "INSERT INTO users(id,username,created_at,last_seen_at,password_salt,password_hash) VALUES(?,?,?,?,?,?)", u.ID, u.Username, now, now, salt, digest)
+		}
 	}
 	if err != nil {
 		writeError(w, 500, "login failed")
+		return
+	}
+	if u.Blocked {
+		writeError(w, http.StatusForbidden, "账号已被管理员拉黑")
+		return
+	}
+	if u.IsAdmin {
+		a.settingsMu.RLock()
+		expected := a.adminPassword
+		a.settingsMu.RUnlock()
+		if subtleConstantCompare(in.Password, expected) == false {
+			writeError(w, http.StatusUnauthorized, "用户名或密码错误")
+			return
+		}
+	} else if !passwordMatches(in.Password, salt, digest) {
+		writeError(w, http.StatusUnauthorized, "用户名或密码错误")
 		return
 	}
 	_, _ = a.db.ExecContext(r.Context(), "UPDATE users SET last_seen_at=? WHERE id=?", now, u.ID)
@@ -309,10 +405,13 @@ func (a *App) logout(w http.ResponseWriter, r *http.Request, u User) {
 }
 func (a *App) me(w http.ResponseWriter, r *http.Request, u User) { writeJSON(w, 200, u) }
 func (a *App) config(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, 200, map[string]any{"autosaveIntervalMs": a.cfg.AutosaveInterval.Milliseconds(), "maxUploadSize": a.cfg.MaxUploadSize})
+	a.settingsMu.RLock()
+	maxEditors := a.settings.MaxDocumentEditors
+	a.settingsMu.RUnlock()
+	writeJSON(w, 200, map[string]any{"autosaveIntervalMs": a.cfg.AutosaveInterval.Milliseconds(), "maxUploadSize": a.cfg.MaxUploadSize, "maxDocumentEditors": maxEditors})
 }
 func (a *App) users(w http.ResponseWriter, r *http.Request, u User) {
-	rows, e := a.db.QueryContext(r.Context(), "SELECT id,username FROM users ORDER BY username")
+	rows, e := a.db.QueryContext(r.Context(), "SELECT id,username,is_admin,blocked FROM users ORDER BY CASE WHEN id=? THEN 0 ELSE 1 END,username", u.ID)
 	if e != nil {
 		writeError(w, 500, "query failed")
 		return
@@ -321,7 +420,7 @@ func (a *App) users(w http.ResponseWriter, r *http.Request, u User) {
 	out := []User{}
 	for rows.Next() {
 		var x User
-		if rows.Scan(&x.ID, &x.Username) == nil {
+		if rows.Scan(&x.ID, &x.Username, &x.IsAdmin, &x.Blocked) == nil {
 			out = append(out, x)
 		}
 	}
@@ -377,29 +476,38 @@ func (a *App) createDrawing(w http.ResponseWriter, r *http.Request, u User) {
 			content = string(document)
 		}
 	}
-	_, e := a.db.ExecContext(r.Context(), "INSERT INTO drawings(id,owner_id,name,scene_json,created_at,updated_at,updated_by,space_type,folder_id,project_id,drawing_type) VALUES(?,?,?,?,?,?,?,?,?,?,?)", id, u.ID, in.Name, content, now, now, u.ID, in.Space, in.FolderID, in.ProjectID, in.Type)
+	a.settingsMu.RLock()
+	defaultLimit := a.settings.DefaultDrawingLimit
+	a.settingsMu.RUnlock()
+	if exists, _ := a.drawingNameExists(r.Context(), in.Name, in.Space, u.ID, in.ProjectID, in.FolderID, ""); exists {
+		writeError(w, 409, "目标位置已存在同名文件，请修改名称")
+		return
+	}
+	order := a.nextDrawingOrder(r.Context(), in.Space, u.ID, in.ProjectID, in.FolderID)
+	_, e := a.db.ExecContext(r.Context(), "INSERT INTO drawings(id,owner_id,name,scene_json,created_at,updated_at,updated_by,space_type,folder_id,project_id,drawing_type,collaborator_limit,sort_order) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)", id, u.ID, in.Name, content, now, now, u.ID, in.Space, in.FolderID, in.ProjectID, in.Type, defaultLimit, order)
 	if e != nil {
 		writeError(w, 500, "create failed")
 		return
 	}
 	a.log.Info("drawing created", "drawing", id, "owner", u.Username)
-	writeJSON(w, 201, Drawing{ID: id, Name: in.Name, Owner: u, UpdatedBy: &u, Scene: json.RawMessage(content), CreatedAt: now, UpdatedAt: now, CanDelete: true, ImageURL: "/image/" + id + ".png", Space: in.Space, FolderID: in.FolderID, ProjectID: in.ProjectID, Type: in.Type})
+	writeJSON(w, 201, Drawing{ID: id, Name: in.Name, Owner: u, UpdatedBy: &u, Scene: json.RawMessage(content), CreatedAt: now, UpdatedAt: now, CanDelete: true, CanEdit: true, ImageURL: "/image/" + id + ".png", Space: in.Space, FolderID: in.FolderID, ProjectID: in.ProjectID, Type: in.Type, CollaborationEnabled: true, CollaboratorLimit: defaultLimit, SortOrder: order})
 }
 
-const drawingSelect = `SELECT d.id,d.name,d.scene_json,d.created_at,d.updated_at,o.id,o.username,ub.id,ub.username,d.space_type,d.folder_id,d.project_id,d.drawing_type FROM drawings d JOIN users o ON o.id=d.owner_id LEFT JOIN users ub ON ub.id=d.updated_by`
+const drawingSelect = `SELECT d.id,d.name,d.scene_json,d.created_at,d.updated_at,o.id,o.username,o.is_admin,o.blocked,ub.id,ub.username,ub.is_admin,ub.blocked,d.space_type,d.folder_id,d.project_id,d.drawing_type,d.collaboration_enabled,d.collaborator_limit,EXISTS(SELECT 1 FROM favorites fav WHERE fav.drawing_id=d.id AND fav.user_id=?),d.sort_order FROM drawings d JOIN users o ON o.id=d.owner_id LEFT JOIN users ub ON ub.id=d.updated_by`
 
 func scanDrawing(s interface{ Scan(...any) error }, current User) (Drawing, error) {
 	var d Drawing
 	var raw string
 	var uid, uname sql.NullString
 	var folderID, projectID sql.NullString
-	e := s.Scan(&d.ID, &d.Name, &raw, &d.CreatedAt, &d.UpdatedAt, &d.Owner.ID, &d.Owner.Username, &uid, &uname, &d.Space, &folderID, &projectID, &d.Type)
+	var updatedAdmin, updatedBlocked sql.NullBool
+	e := s.Scan(&d.ID, &d.Name, &raw, &d.CreatedAt, &d.UpdatedAt, &d.Owner.ID, &d.Owner.Username, &d.Owner.IsAdmin, &d.Owner.Blocked, &uid, &uname, &updatedAdmin, &updatedBlocked, &d.Space, &folderID, &projectID, &d.Type, &d.CollaborationEnabled, &d.CollaboratorLimit, &d.Favorite, &d.SortOrder)
 	if e != nil {
 		return d, e
 	}
 	d.Scene = json.RawMessage(raw)
 	if uid.Valid {
-		d.UpdatedBy = &User{ID: uid.String, Username: uname.String}
+		d.UpdatedBy = &User{ID: uid.String, Username: uname.String, IsAdmin: updatedAdmin.Bool, Blocked: updatedBlocked.Bool}
 	}
 	if folderID.Valid {
 		d.FolderID = &folderID.String
@@ -407,12 +515,23 @@ func scanDrawing(s interface{ Scan(...any) error }, current User) (Drawing, erro
 	if projectID.Valid {
 		d.ProjectID = &projectID.String
 	}
-	d.CanDelete = d.Owner.ID == current.ID
+	d.CanDelete = d.Owner.ID == current.ID || current.IsAdmin
+	d.CanEdit = true
 	d.ImageURL = "/image/" + d.ID + ".png"
 	return d, nil
 }
 func (a *App) listDrawings(w http.ResponseWriter, r *http.Request, u User) {
-	rows, e := a.db.QueryContext(r.Context(), drawingSelect+" ORDER BY d.updated_at DESC")
+	query := drawingSelect
+	args := []any{u.ID}
+	if r.URL.Query().Get("mine") == "1" {
+		query += ` WHERE d.updated_by=? OR EXISTS(SELECT 1 FROM favorites mine WHERE mine.drawing_id=d.id AND mine.user_id=?)`
+		args = append(args, u.ID, u.ID)
+	}
+	query += " ORDER BY d.updated_at DESC"
+	if r.URL.Query().Get("mine") == "1" {
+		query += " LIMIT 100"
+	}
+	rows, e := a.db.QueryContext(r.Context(), query, args...)
 	if e != nil {
 		writeError(w, 500, "query failed")
 		return
@@ -431,7 +550,7 @@ func (a *App) listDrawings(w http.ResponseWriter, r *http.Request, u User) {
 	writeJSON(w, 200, out)
 }
 func (a *App) getDrawing(ctx context.Context, id string, u User) (Drawing, error) {
-	return scanDrawing(a.db.QueryRowContext(ctx, drawingSelect+" WHERE d.id=?", id), u)
+	return scanDrawing(a.db.QueryRowContext(ctx, drawingSelect+" WHERE d.id=?", u.ID, id), u)
 }
 
 func (a *App) drawingRoute(w http.ResponseWriter, r *http.Request) {
@@ -451,6 +570,9 @@ func (a *App) drawingRoute(w http.ResponseWriter, r *http.Request) {
 		a.autosave(w, r, u, id)
 		return
 	}
+	if len(parts) == 2 && a.drawingOperationRoute(w, r, u, id, parts[1]) {
+		return
+	}
 	if len(parts) != 1 {
 		writeError(w, 404, "not found")
 		return
@@ -465,6 +587,9 @@ func (a *App) drawingRoute(w http.ResponseWriter, r *http.Request) {
 		if e != nil {
 			writeError(w, 500, "query failed")
 			return
+		}
+		if readOnly, _, accessErr := a.CollaborationAccess(r.Context(), id, u.ID); accessErr == nil {
+			d.CanEdit = !readOnly
 		}
 		writeJSON(w, 200, d)
 	case http.MethodPatch:
@@ -486,6 +611,19 @@ func (a *App) renameDrawing(w http.ResponseWriter, r *http.Request, u User, id s
 	in.Name = strings.TrimSpace(in.Name)
 	if len(in.Name) < 1 || len(in.Name) > 200 {
 		writeError(w, 400, "name must be 1-200 characters")
+		return
+	}
+	drawing, err := a.getDrawing(r.Context(), id, u)
+	if err != nil {
+		writeError(w, 404, "drawing not found")
+		return
+	}
+	if readOnly, _, accessErr := a.CollaborationAccess(r.Context(), id, u.ID); accessErr != nil || readOnly {
+		writeError(w, http.StatusForbidden, "当前为只读状态，无法修改文件名")
+		return
+	}
+	if exists, _ := a.drawingNameExists(r.Context(), in.Name, drawing.Space, drawing.Owner.ID, drawing.ProjectID, drawing.FolderID, id); exists {
+		writeError(w, 409, "当前位置已存在同名文件")
 		return
 	}
 	res, e := a.db.ExecContext(r.Context(), "UPDATE drawings SET name=?,updated_at=?,updated_by=? WHERE id=?", in.Name, time.Now().UnixMilli(), u.ID, id)
@@ -533,7 +671,7 @@ func (a *App) deleteDrawing(w http.ResponseWriter, r *http.Request, u User, id s
 
 func CanView(_ User, _ Drawing) bool   { return true }
 func CanEdit(_ User, _ Drawing) bool   { return true }
-func CanDelete(u User, d Drawing) bool { return u.ID == d.Owner.ID }
+func CanDelete(u User, d Drawing) bool { return u.ID == d.Owner.ID || u.IsAdmin }
 
 func (a *App) autosave(w http.ResponseWriter, r *http.Request, u User, id string) {
 	drawing, e := a.getDrawing(r.Context(), id, u)
@@ -542,6 +680,11 @@ func (a *App) autosave(w http.ResponseWriter, r *http.Request, u User, id string
 		return
 	} else if e != nil {
 		writeError(w, 500, "query failed")
+		return
+	}
+	readOnly, _, accessErr := a.CollaborationAccess(r.Context(), id, u.ID)
+	if accessErr != nil || readOnly {
+		writeError(w, http.StatusForbidden, "当前为只读状态，无法保存修改")
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, a.cfg.MaxUploadSize)
@@ -598,6 +741,7 @@ func (a *App) autosave(w http.ResponseWriter, r *http.Request, u User, id string
 		writeError(w, 500, "save scene failed")
 		return
 	}
+	a.recordDrawingActivity(r.Context(), id, u.ID, now)
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, 200, map[string]any{"savedAt": now})
 }

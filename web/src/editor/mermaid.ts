@@ -8,7 +8,13 @@ let wasmReady:Promise<void>|null=null;
 async function renderMermaidSource(code:string,theme:string):Promise<string>{
   // SVG foreignObject labels taint Canvas in Chromium. Text labels keep PNG export
   // fully browser-side and avoid any server-side rendering dependency.
-  mermaid.initialize({startOnLoad:false,securityLevel:"strict",theme:theme as any,flowchart:{htmlLabels:false}});
+  mermaid.initialize({
+    startOnLoad:false,
+    securityLevel:"strict",
+    suppressErrorRendering:true,
+    theme:theme as any,
+    flowchart:{htmlLabels:false},
+  });
   const id=`mermaid-export-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const result=await mermaid.render(id,code);
   return xml(result.svg);

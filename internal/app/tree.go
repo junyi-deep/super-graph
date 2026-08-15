@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 )
@@ -20,15 +21,17 @@ type Folder struct {
 	CreatedAt int64   `json:"createdAt"`
 	UpdatedAt int64   `json:"updatedAt"`
 	CanDelete bool    `json:"canDelete"`
+	SortOrder float64 `json:"sortOrder"`
 }
 
 type Project struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	CreatedBy User   `json:"createdBy"`
-	CreatedAt int64  `json:"createdAt"`
-	UpdatedAt int64  `json:"updatedAt"`
-	CanDelete bool   `json:"canDelete"`
+	ID        string  `json:"id"`
+	Name      string  `json:"name"`
+	CreatedBy User    `json:"createdBy"`
+	CreatedAt int64   `json:"createdAt"`
+	UpdatedAt int64   `json:"updatedAt"`
+	CanDelete bool    `json:"canDelete"`
+	SortOrder float64 `json:"sortOrder"`
 }
 
 type TreeResponse struct {
@@ -40,14 +43,23 @@ type TreeResponse struct {
 
 func (a *App) tree(w http.ResponseWriter, r *http.Request, u User) {
 	out := TreeResponse{Users: []User{}, Projects: []Project{}, Folders: []Folder{}, Drawings: []Drawing{}}
-	rows, err := a.db.QueryContext(r.Context(), "SELECT id,username FROM users ORDER BY username")
+	mode, rootID, parentID, search := r.URL.Query().Get("mode"), r.URL.Query().Get("rootId"), r.URL.Query().Get("parentId"), strings.TrimSpace(r.URL.Query().Get("q"))
+	legacy := mode == ""
+	userQuery := "SELECT id,username,is_admin,blocked FROM users"
+	userArgs := []any{}
+	if mode == "project" && !legacy {
+		userQuery += " WHERE 0"
+	}
+	userQuery += " ORDER BY CASE WHEN id=? THEN 0 ELSE 1 END,username"
+	userArgs = append(userArgs, u.ID)
+	rows, err := a.db.QueryContext(r.Context(), userQuery, userArgs...)
 	if err != nil {
 		writeError(w, 500, "query failed")
 		return
 	}
 	for rows.Next() {
 		var item User
-		if err = rows.Scan(&item.ID, &item.Username); err != nil {
+		if err = rows.Scan(&item.ID, &item.Username, &item.IsAdmin, &item.Blocked); err != nil {
 			rows.Close()
 			writeError(w, 500, "query failed")
 			return
@@ -55,23 +67,54 @@ func (a *App) tree(w http.ResponseWriter, r *http.Request, u User) {
 		out.Users = append(out.Users, item)
 	}
 	rows.Close()
-	rows, err = a.db.QueryContext(r.Context(), `SELECT p.id,p.name,p.created_at,p.updated_at,u.id,u.username FROM projects p JOIN users u ON u.id=p.created_by ORDER BY p.name`)
+	projectQuery := `SELECT p.id,p.name,p.created_at,p.updated_at,p.sort_order,u.id,u.username,u.is_admin,u.blocked FROM projects p JOIN users u ON u.id=p.created_by`
+	projectArgs := []any{}
+	if mode == "user" && !legacy {
+		projectQuery += " WHERE 0"
+	}
+	projectQuery += " ORDER BY p.sort_order,p.name"
+	rows, err = a.db.QueryContext(r.Context(), projectQuery, projectArgs...)
 	if err != nil {
 		writeError(w, 500, "query failed")
 		return
 	}
 	for rows.Next() {
 		var item Project
-		if err = rows.Scan(&item.ID, &item.Name, &item.CreatedAt, &item.UpdatedAt, &item.CreatedBy.ID, &item.CreatedBy.Username); err != nil {
+		if err = rows.Scan(&item.ID, &item.Name, &item.CreatedAt, &item.UpdatedAt, &item.SortOrder, &item.CreatedBy.ID, &item.CreatedBy.Username, &item.CreatedBy.IsAdmin, &item.CreatedBy.Blocked); err != nil {
 			rows.Close()
 			writeError(w, 500, "query failed")
 			return
 		}
-		item.CanDelete = item.CreatedBy.ID == u.ID
+		item.CanDelete = item.CreatedBy.ID == u.ID || u.IsAdmin
 		out.Projects = append(out.Projects, item)
 	}
 	rows.Close()
-	rows, err = a.db.QueryContext(r.Context(), `SELECT f.id,f.name,f.space_type,f.user_id,f.project_id,f.parent_id,f.created_at,f.updated_at,u.id,u.username FROM folders f JOIN users u ON u.id=f.created_by ORDER BY f.name`)
+	folderQuery := `SELECT f.id,f.name,f.space_type,f.user_id,f.project_id,f.parent_id,f.created_at,f.updated_at,f.sort_order,u.id,u.username,u.is_admin,u.blocked FROM folders f JOIN users u ON u.id=f.created_by`
+	folderWhere := []string{}
+	folderArgs := []any{}
+	if !legacy {
+		folderWhere = append(folderWhere, "f.space_type=?")
+		folderArgs = append(folderArgs, mode)
+		if search == "" && parentID != "" {
+			folderWhere = append(folderWhere, "f.parent_id=?")
+			folderArgs = append(folderArgs, parentID)
+		} else if rootID != "" {
+			folderWhere = append(folderWhere, "f.parent_id IS NULL")
+			if mode == "user" {
+				folderWhere = append(folderWhere, "f.user_id=?")
+			} else {
+				folderWhere = append(folderWhere, "f.project_id=?")
+			}
+			folderArgs = append(folderArgs, rootID)
+		} else {
+			folderWhere = append(folderWhere, "0")
+		}
+	}
+	if len(folderWhere) > 0 {
+		folderQuery += " WHERE " + strings.Join(folderWhere, " AND ")
+	}
+	folderQuery += " ORDER BY f.sort_order,f.name"
+	rows, err = a.db.QueryContext(r.Context(), folderQuery, folderArgs...)
 	if err != nil {
 		writeError(w, 500, "query failed")
 		return
@@ -79,7 +122,7 @@ func (a *App) tree(w http.ResponseWriter, r *http.Request, u User) {
 	for rows.Next() {
 		var item Folder
 		var userID, projectID, parentID sql.NullString
-		if err = rows.Scan(&item.ID, &item.Name, &item.Space, &userID, &projectID, &parentID, &item.CreatedAt, &item.UpdatedAt, &item.CreatedBy.ID, &item.CreatedBy.Username); err != nil {
+		if err = rows.Scan(&item.ID, &item.Name, &item.Space, &userID, &projectID, &parentID, &item.CreatedAt, &item.UpdatedAt, &item.SortOrder, &item.CreatedBy.ID, &item.CreatedBy.Username, &item.CreatedBy.IsAdmin, &item.CreatedBy.Blocked); err != nil {
 			rows.Close()
 			writeError(w, 500, "query failed")
 			return
@@ -93,11 +136,36 @@ func (a *App) tree(w http.ResponseWriter, r *http.Request, u User) {
 		if parentID.Valid {
 			item.ParentID = &parentID.String
 		}
-		item.CanDelete = item.CreatedBy.ID == u.ID
+		item.CanDelete = item.CreatedBy.ID == u.ID || u.IsAdmin
 		out.Folders = append(out.Folders, item)
 	}
 	rows.Close()
-	rows, err = a.db.QueryContext(r.Context(), drawingSelect+" ORDER BY d.name")
+	drawingQuery := drawingSelect
+	drawingArgs := []any{u.ID}
+	drawingWhere := []string{}
+	if !legacy {
+		drawingWhere = append(drawingWhere, "d.space_type=?")
+		drawingArgs = append(drawingArgs, mode)
+		if search == "" && parentID != "" {
+			drawingWhere = append(drawingWhere, "d.folder_id=?")
+			drawingArgs = append(drawingArgs, parentID)
+		} else if rootID != "" {
+			drawingWhere = append(drawingWhere, "d.folder_id IS NULL")
+			if mode == "user" {
+				drawingWhere = append(drawingWhere, "d.owner_id=?")
+			} else {
+				drawingWhere = append(drawingWhere, "d.project_id=?")
+			}
+			drawingArgs = append(drawingArgs, rootID)
+		} else {
+			drawingWhere = append(drawingWhere, "0")
+		}
+	}
+	if len(drawingWhere) > 0 {
+		drawingQuery += " WHERE " + strings.Join(drawingWhere, " AND ")
+	}
+	drawingQuery += " ORDER BY d.sort_order,d.name"
+	rows, err = a.db.QueryContext(r.Context(), drawingQuery, drawingArgs...)
 	if err != nil {
 		writeError(w, 500, "query failed")
 		return
@@ -158,13 +226,21 @@ func (a *App) createFolder(w http.ResponseWriter, r *http.Request, u User) {
 		writeError(w, 400, err.Error())
 		return
 	}
+	var duplicate int
+	_ = a.db.QueryRowContext(r.Context(), `SELECT count(*) FROM folders WHERE name=? AND space_type=? AND user_id IS ? AND project_id IS ? AND parent_id IS ?`, in.Name, in.Space, in.UserID, in.ProjectID, in.ParentID).Scan(&duplicate)
+	if duplicate > 0 {
+		writeError(w, 409, "同级目录已存在同名目录")
+		return
+	}
 	id, now := newID(), time.Now().UnixMilli()
-	_, err := a.db.ExecContext(r.Context(), `INSERT INTO folders(id,name,space_type,user_id,project_id,parent_id,created_by,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)`, id, in.Name, in.Space, in.UserID, in.ProjectID, in.ParentID, u.ID, now, now)
+	var order float64
+	_ = a.db.QueryRowContext(r.Context(), `SELECT COALESCE(max(sort_order),0)+1 FROM folders WHERE space_type=? AND user_id IS ? AND project_id IS ? AND parent_id IS ?`, in.Space, in.UserID, in.ProjectID, in.ParentID).Scan(&order)
+	_, err := a.db.ExecContext(r.Context(), `INSERT INTO folders(id,name,space_type,user_id,project_id,parent_id,created_by,created_at,updated_at,sort_order) VALUES(?,?,?,?,?,?,?,?,?,?)`, id, in.Name, in.Space, in.UserID, in.ProjectID, in.ParentID, u.ID, now, now, order)
 	if err != nil {
 		writeError(w, 409, "同级目录创建失败")
 		return
 	}
-	writeJSON(w, 201, Folder{ID: id, Name: in.Name, Space: in.Space, UserID: in.UserID, ProjectID: in.ProjectID, ParentID: in.ParentID, CreatedBy: u, CreatedAt: now, UpdatedAt: now, CanDelete: true})
+	writeJSON(w, 201, Folder{ID: id, Name: in.Name, Space: in.Space, UserID: in.UserID, ProjectID: in.ProjectID, ParentID: in.ParentID, CreatedBy: u, CreatedAt: now, UpdatedAt: now, CanDelete: true, SortOrder: order})
 }
 
 func (a *App) folderRoute(w http.ResponseWriter, r *http.Request) {
@@ -186,7 +262,7 @@ func (a *App) folderRoute(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "query failed")
 		return
 	}
-	if creator != u.ID {
+	if creator != u.ID && !u.IsAdmin {
 		writeError(w, 403, "只能管理自己创建的目录")
 		return
 	}
@@ -239,11 +315,13 @@ func (a *App) createProject(w http.ResponseWriter, r *http.Request, u User) {
 		return
 	}
 	id, now := newID(), time.Now().UnixMilli()
-	if _, err := a.db.ExecContext(r.Context(), "INSERT INTO projects(id,name,created_by,created_at,updated_at) VALUES(?,?,?,?,?)", id, in.Name, u.ID, now, now); err != nil {
+	var order float64
+	_ = a.db.QueryRowContext(r.Context(), `SELECT COALESCE(max(sort_order),0)+1 FROM projects`).Scan(&order)
+	if _, err := a.db.ExecContext(r.Context(), "INSERT INTO projects(id,name,created_by,created_at,updated_at,sort_order) VALUES(?,?,?,?,?,?)", id, in.Name, u.ID, now, now, order); err != nil {
 		writeError(w, 500, "create failed")
 		return
 	}
-	writeJSON(w, 201, Project{ID: id, Name: in.Name, CreatedBy: u, CreatedAt: now, UpdatedAt: now, CanDelete: true})
+	writeJSON(w, 201, Project{ID: id, Name: in.Name, CreatedBy: u, CreatedAt: now, UpdatedAt: now, CanDelete: true, SortOrder: order})
 }
 func (a *App) projectRoute(w http.ResponseWriter, r *http.Request) {
 	u, err := a.currentUser(r)
@@ -264,7 +342,7 @@ func (a *App) projectRoute(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "query failed")
 		return
 	}
-	if creator != u.ID {
+	if creator != u.ID && !u.IsAdmin {
 		writeError(w, 403, "只能管理自己创建的项目")
 		return
 	}
@@ -290,11 +368,39 @@ func (a *App) projectRoute(w http.ResponseWriter, r *http.Request) {
 	case http.MethodDelete:
 		var count int
 		_ = a.db.QueryRowContext(r.Context(), `SELECT (SELECT count(*) FROM folders WHERE project_id=?)+(SELECT count(*) FROM drawings WHERE project_id=?)`, id, id).Scan(&count)
-		if count > 0 {
+		if count > 0 && !u.IsAdmin {
 			writeError(w, 409, "项目非空，请先删除其中内容")
 			return
 		}
-		if _, err = a.db.ExecContext(r.Context(), "DELETE FROM projects WHERE id=?", id); err != nil {
+		if u.IsAdmin {
+			rows, _ := a.db.QueryContext(r.Context(), `SELECT id FROM drawings WHERE project_id=?`, id)
+			var ids []string
+			if rows != nil {
+				for rows.Next() {
+					var drawingID string
+					if rows.Scan(&drawingID) == nil {
+						ids = append(ids, drawingID)
+					}
+				}
+				rows.Close()
+			}
+			if _, err = a.db.ExecContext(r.Context(), `UPDATE folders SET parent_id=NULL WHERE project_id=?`, id); err == nil {
+				_, err = a.db.ExecContext(r.Context(), `DELETE FROM drawings WHERE project_id=?`, id)
+			}
+			if err == nil {
+				_, err = a.db.ExecContext(r.Context(), `DELETE FROM folders WHERE project_id=?`, id)
+			}
+			for _, drawingID := range ids {
+				_ = os.Remove(a.imagePath(drawingID))
+				if a.collab != nil {
+					_ = a.collab.Delete(r.Context(), drawingID)
+				}
+			}
+		}
+		if err == nil {
+			_, err = a.db.ExecContext(r.Context(), "DELETE FROM projects WHERE id=?", id)
+		}
+		if err != nil {
 			writeError(w, 500, "delete failed")
 			return
 		}
@@ -302,6 +408,54 @@ func (a *App) projectRoute(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeError(w, 405, "method not allowed")
 	}
+}
+
+func (a *App) reorderTree(w http.ResponseWriter, r *http.Request, u User) {
+	var in struct {
+		Items []struct {
+			Kind  string  `json:"kind"`
+			ID    string  `json:"id"`
+			Order float64 `json:"order"`
+		} `json:"items"`
+	}
+	if !decodeJSON(w, r, &in) {
+		return
+	}
+	if len(in.Items) == 0 || len(in.Items) > 500 {
+		writeError(w, 400, "排序内容无效")
+		return
+	}
+	tx, err := a.db.BeginTx(r.Context(), nil)
+	if err != nil {
+		writeError(w, 500, "排序失败")
+		return
+	}
+	defer tx.Rollback()
+	for _, item := range in.Items {
+		if !drawingIDPattern.MatchString(item.ID) {
+			writeError(w, 400, "排序节点无效")
+			return
+		}
+		switch item.Kind {
+		case "folder":
+			_, err = tx.ExecContext(r.Context(), `UPDATE folders SET sort_order=?,updated_at=? WHERE id=? AND (created_by=? OR ?=1)`, item.Order, time.Now().UnixMilli(), item.ID, u.ID, u.IsAdmin)
+		case "drawing":
+			_, err = tx.ExecContext(r.Context(), `UPDATE drawings SET sort_order=? WHERE id=? AND (owner_id=? OR space_type='project' OR ?=1)`, item.Order, item.ID, u.ID, u.IsAdmin)
+		case "project":
+			_, err = tx.ExecContext(r.Context(), `UPDATE projects SET sort_order=? WHERE id=?`, item.Order, item.ID)
+		default:
+			err = errors.New("invalid kind")
+		}
+		if err != nil {
+			writeError(w, 500, "排序失败")
+			return
+		}
+	}
+	if err = tx.Commit(); err != nil {
+		writeError(w, 500, "排序失败")
+		return
+	}
+	w.WriteHeader(204)
 }
 
 func (a *App) validateFolderLocation(ctx context.Context, u User, space string, userID, projectID, parentID *string) error {

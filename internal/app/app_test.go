@@ -59,7 +59,10 @@ func (c *testClient) req(method, path string, body io.Reader, contentType string
 	return resp
 }
 func (c *testClient) login(name string) User {
-	resp := c.req("POST", "/api/login", strings.NewReader(fmt.Sprintf(`{"username":%q}`, name)), "application/json")
+	return c.loginPassword(name, "123456")
+}
+func (c *testClient) loginPassword(name, password string) User {
+	resp := c.req("POST", "/api/login", strings.NewReader(fmt.Sprintf(`{"username":%q,"password":%q}`, name, password)), "application/json")
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
 		b, _ := io.ReadAll(resp.Body)
@@ -71,6 +74,86 @@ func (c *testClient) login(name string) User {
 		c.t.Fatal("bad login json")
 	}
 	return u
+}
+
+func TestPasswordAuthenticationAndAdminControls(t *testing.T) {
+	a, s := newTestApp(t, t.TempDir())
+	defer s.Close()
+	defer a.Close()
+	alice := tc(t, s)
+	alice.login("alice")
+	resp := alice.req("PATCH", "/api/password", strings.NewReader(`{"password":"new-password"}`), "application/json")
+	resp.Body.Close()
+	if resp.StatusCode != 204 {
+		t.Fatalf("change password = %d", resp.StatusCode)
+	}
+	old := tc(t, s)
+	resp = old.req("POST", "/api/login", strings.NewReader(`{"username":"alice","password":"123456"}`), "application/json")
+	resp.Body.Close()
+	if resp.StatusCode != 401 {
+		t.Fatalf("old password = %d", resp.StatusCode)
+	}
+	fresh := tc(t, s)
+	fresh.loginPassword("alice", "new-password")
+	admin := tc(t, s)
+	admin.loginPassword("admin", "admin123456")
+	resp = admin.req("PATCH", "/api/admin/users/"+fresh.loginPassword("alice", "new-password").ID, strings.NewReader(`{"blocked":true}`), "application/json")
+	resp.Body.Close()
+	if resp.StatusCode != 204 {
+		t.Fatalf("block user = %d", resp.StatusCode)
+	}
+	resp = fresh.req("GET", "/api/me", nil, "")
+	resp.Body.Close()
+	if resp.StatusCode != 401 {
+		t.Fatalf("blocked session = %d", resp.StatusCode)
+	}
+}
+
+func TestLazyTreeFavoritesCopyAndMove(t *testing.T) {
+	a, s := newTestApp(t, t.TempDir())
+	defer s.Close()
+	defer a.Close()
+	c := tc(t, s)
+	u := c.login("alice")
+	d := c.create("source")
+	resp := c.req("GET", "/api/tree?mode=user", nil, "")
+	var roots TreeResponse
+	_ = json.NewDecoder(resp.Body).Decode(&roots)
+	resp.Body.Close()
+	if len(roots.Users) < 1 || len(roots.Drawings) != 0 {
+		t.Fatalf("lazy roots = %#v", roots)
+	}
+	resp = c.req("GET", "/api/tree?mode=user&rootId="+u.ID, nil, "")
+	var children TreeResponse
+	_ = json.NewDecoder(resp.Body).Decode(&children)
+	resp.Body.Close()
+	if len(children.Drawings) != 1 {
+		t.Fatalf("root children = %#v", children)
+	}
+	resp = c.req("PUT", "/api/drawings/"+d.ID+"/favorite", nil, "")
+	resp.Body.Close()
+	if resp.StatusCode != 204 {
+		t.Fatal(resp.StatusCode)
+	}
+	resp = c.req("GET", "/api/drawings?mine=1", nil, "")
+	var mine []Drawing
+	_ = json.NewDecoder(resp.Body).Decode(&mine)
+	resp.Body.Close()
+	if len(mine) != 1 || !mine[0].Favorite {
+		t.Fatalf("favorites = %#v", mine)
+	}
+	resp = c.req("POST", "/api/drawings/"+d.ID+"/relocate", strings.NewReader(`{"operation":"copy","name":"copy","space":"user"}`), "application/json")
+	var copied Drawing
+	_ = json.NewDecoder(resp.Body).Decode(&copied)
+	resp.Body.Close()
+	if resp.StatusCode != 201 || copied.ID == d.ID {
+		t.Fatalf("copy = %d %#v", resp.StatusCode, copied)
+	}
+	resp = c.req("POST", "/api/drawings/"+d.ID+"/relocate", strings.NewReader(`{"operation":"copy","name":"copy","space":"user"}`), "application/json")
+	resp.Body.Close()
+	if resp.StatusCode != 409 {
+		t.Fatalf("duplicate copy = %d", resp.StatusCode)
+	}
 }
 func (c *testClient) create(name string) Drawing {
 	resp := c.req("POST", "/api/drawings", strings.NewReader(fmt.Sprintf(`{"name":%q}`, name)), "application/json")
@@ -107,7 +190,7 @@ func TestProxyOriginDoesNotBlockLoginOrWrites(t *testing.T) {
 	a, s := newTestApp(t, t.TempDir())
 	defer s.Close()
 	defer a.Close()
-	login, _ := http.NewRequest(http.MethodPost, s.URL+"/api/login", strings.NewReader(`{"username":"proxy-user"}`))
+	login, _ := http.NewRequest(http.MethodPost, s.URL+"/api/login", strings.NewReader(`{"username":"proxy-user","password":"123456"}`))
 	login.Header.Set("Content-Type", "application/json")
 	login.Header.Set("Origin", "http://proxy-switchyomega.local")
 	login.Header.Set("Referer", "http://proxy-switchyomega.local/login")
@@ -363,6 +446,40 @@ func TestDrawingAndSceneSurviveRestart(t *testing.T) {
 	b, _ := os.ReadFile(filepath.Join(dir, "images", d.ID+".png"))
 	if !bytes.Equal(b, pngA) {
 		t.Fatal("image did not persist")
+	}
+}
+
+func TestTreeReorderPersistsAndReturnsSortOrder(t *testing.T) {
+	a, s := newTestApp(t, t.TempDir())
+	defer s.Close()
+	defer a.Close()
+	c := tc(t, s)
+	u := c.login("alice")
+	first := c.create("first")
+	second := c.create("second")
+
+	body := fmt.Sprintf(
+		`{"items":[{"kind":"drawing","id":%q,"order":1},{"kind":"drawing","id":%q,"order":2}]}`,
+		second.ID,
+		first.ID,
+	)
+	resp := c.req("PATCH", "/api/tree/reorder", strings.NewReader(body), "application/json")
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("reorder status = %d", resp.StatusCode)
+	}
+
+	resp = c.req("GET", "/api/tree?mode=user&rootId="+u.ID, nil, "")
+	defer resp.Body.Close()
+	var tree TreeResponse
+	if err := json.NewDecoder(resp.Body).Decode(&tree); err != nil {
+		t.Fatal(err)
+	}
+	if len(tree.Drawings) != 2 || tree.Drawings[0].ID != second.ID || tree.Drawings[1].ID != first.ID {
+		t.Fatalf("reordered drawings = %#v", tree.Drawings)
+	}
+	if tree.Drawings[0].SortOrder != 1 || tree.Drawings[1].SortOrder != 2 {
+		t.Fatalf("sort orders = %v, %v", tree.Drawings[0].SortOrder, tree.Drawings[1].SortOrder)
 	}
 }
 
