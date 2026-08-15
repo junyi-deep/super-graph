@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { RefObject } from "react";
-import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types/types";
+import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
 import { generateNKeysBetween } from "fractional-indexing";
 import { ExcalidrawBinding } from "y-excalidraw";
 import { WebsocketProvider } from "y-websocket";

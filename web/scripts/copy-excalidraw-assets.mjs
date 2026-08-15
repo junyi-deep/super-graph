@@ -6,15 +6,15 @@ const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const webDirectory = resolve(scriptDirectory, "..");
 const source = resolve(
   webDirectory,
-  "node_modules/@excalidraw/excalidraw/dist/excalidraw-assets",
+  "node_modules/@excalidraw/excalidraw/dist/prod/fonts",
 );
 const destination = resolve(
   webDirectory,
-  "../internal/frontend/dist/excalidraw-assets",
+  "../internal/frontend/dist/fonts",
 );
 
 await rm(destination, { recursive: true, force: true });
 await mkdir(dirname(destination), { recursive: true });
 await cp(source, destination, { recursive: true });
 
-console.log(`Copied Excalidraw assets to ${destination}`);
+console.log(`Copied Excalidraw fonts to ${destination}`);

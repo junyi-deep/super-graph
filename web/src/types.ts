@@ -15,5 +15,5 @@ export type Folder = {
 export type Project = { id: string; name: string; createdBy: User; createdAt: number; updatedAt: number; canDelete: boolean };
 export type TreeData = { users: User[]; projects: Project[]; folders: Folder[]; drawings: Drawing[] };
 export type Rank = { name: string; count: number };
-export type ActivityDay = { date: string; count: number };
+export type ActivityDay = { date: string; count: number; created: number; updated: number };
 export type Stats = { dailyActive: number; monthlyActive: number; activity: ActivityDay[]; personalFiles: Rank[]; projectFiles: Rank[] };

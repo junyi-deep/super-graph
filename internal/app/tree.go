@@ -392,8 +392,10 @@ type Stats struct {
 }
 
 type Day struct {
-	Date  string `json:"date"`
-	Count int    `json:"count"`
+	Date    string `json:"date"`
+	Count   int    `json:"count"`
+	Created int    `json:"created"`
+	Updated int    `json:"updated"`
 }
 
 func (a *App) stats(w http.ResponseWriter, r *http.Request, u User) {
@@ -402,15 +404,36 @@ func (a *App) stats(w http.ResponseWriter, r *http.Request, u User) {
 	month := time.Now().AddDate(0, 0, -29).Format("2006-01-02")
 	_ = a.db.QueryRowContext(r.Context(), "SELECT count(DISTINCT user_id) FROM activity_daily WHERE day=?", today).Scan(&out.DailyActive)
 	_ = a.db.QueryRowContext(r.Context(), "SELECT count(DISTINCT user_id) FROM activity_daily WHERE day>=?", month).Scan(&out.MonthlyActive)
-	heatmapStart := time.Now().AddDate(-1, 0, 1).Format("2006-01-02")
-	rows, err := a.db.QueryContext(r.Context(), `SELECT day,count(DISTINCT user_id) FROM activity_daily WHERE day>=? GROUP BY day ORDER BY day`, heatmapStart)
+	heatmapStart := time.Now().AddDate(-1, 0, -7)
+	days := map[string]*Day{}
+	rows, err := a.db.QueryContext(r.Context(), `SELECT created_at,updated_at FROM drawings WHERE created_at>=? OR updated_at>=?`, heatmapStart.UnixMilli(), heatmapStart.UnixMilli())
 	if err == nil {
 		for rows.Next() {
-			var x Day
-			_ = rows.Scan(&x.Date, &x.Count)
-			out.Activity = append(out.Activity, x)
+			var createdAt, updatedAt int64
+			if rows.Scan(&createdAt, &updatedAt) != nil {
+				continue
+			}
+			createdDay := time.UnixMilli(createdAt).In(time.Local).Format("2006-01-02")
+			if days[createdDay] == nil {
+				days[createdDay] = &Day{Date: createdDay}
+			}
+			days[createdDay].Created++
+			if updatedAt > createdAt {
+				updatedDay := time.UnixMilli(updatedAt).In(time.Local).Format("2006-01-02")
+				if days[updatedDay] == nil {
+					days[updatedDay] = &Day{Date: updatedDay}
+				}
+				days[updatedDay].Updated++
+			}
 		}
 		rows.Close()
+	}
+	for date := heatmapStart; !date.After(time.Now()); date = date.AddDate(0, 0, 1) {
+		key := date.Format("2006-01-02")
+		if item := days[key]; item != nil {
+			item.Count = item.Created + item.Updated
+			out.Activity = append(out.Activity, *item)
+		}
 	}
 	rows, err = a.db.QueryContext(r.Context(), `SELECT u.username,count(d.id) FROM users u LEFT JOIN drawings d ON d.owner_id=u.id GROUP BY u.id ORDER BY count(d.id) DESC,u.username LIMIT 10`)
 	if err == nil {

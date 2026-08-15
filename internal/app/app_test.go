@@ -156,6 +156,21 @@ func TestMermaidDrawingAndFallbackImage(t *testing.T) {
 	}
 }
 
+func TestMermaidDrawingAcceptsSelectedTemplate(t *testing.T) {
+	a, s := newTestApp(t, t.TempDir())
+	defer s.Close()
+	defer a.Close()
+	c := tc(t, s)
+	c.login("alice")
+	resp := c.req("POST", "/api/drawings", strings.NewReader(`{"name":"sequence","type":"mermaid","mermaidCode":"sequenceDiagram\nA->>B: hello"}`), "application/json")
+	defer resp.Body.Close()
+	var drawing Drawing
+	_ = json.NewDecoder(resp.Body).Decode(&drawing)
+	if resp.StatusCode != 201 || !bytes.Contains(drawing.Scene, []byte("sequenceDiagram")) {
+		t.Fatalf("template create: %d %s", resp.StatusCode, drawing.Scene)
+	}
+}
+
 func TestAuthLifecycleAndRestart(t *testing.T) {
 	dir := t.TempDir()
 	a, s := newTestApp(t, dir)
@@ -404,7 +419,7 @@ func TestUserAndProjectTreesAndStats(t *testing.T) {
 	var stats Stats
 	_ = json.NewDecoder(resp.Body).Decode(&stats)
 	resp.Body.Close()
-	if stats.DailyActive != 1 || stats.MonthlyActive != 1 || len(stats.Activity) == 0 || len(stats.ProjectFiles) != 1 || stats.ProjectFiles[0].Count != 1 {
+	if stats.DailyActive != 1 || stats.MonthlyActive != 1 || len(stats.Activity) == 0 || stats.Activity[len(stats.Activity)-1].Created != 1 || len(stats.ProjectFiles) != 1 || stats.ProjectFiles[0].Count != 1 {
 		t.Fatalf("stats = %#v", stats)
 	}
 }
