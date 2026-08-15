@@ -1,0 +1,46 @@
+name: Windows PowerShell
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/windows.yml"
+      - "scripts/**"
+      - "web/**"
+      - "cmd/**"
+      - "internal/**"
+      - "go.mod"
+      - "go.sum"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/windows.yml"
+      - "scripts/**"
+      - "web/**"
+      - "cmd/**"
+      - "internal/**"
+      - "go.mod"
+      - "go.sum"
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Build with Windows PowerShell
+        shell: powershell
+        run: .\scripts\build.ps1 -OutputPath .\dist\super-graph.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: super-graph-windows-powershell
+          path: dist/super-graph.exe
