@@ -1,5 +1,5 @@
-import type { AppState, BinaryFiles } from "@excalidraw/excalidraw/types/types";
-import type { ExcalidrawElement } from "@excalidraw/excalidraw/types/element/types";
+import type { AppState, BinaryFiles } from "@excalidraw/excalidraw/types";
+import type { ExcalidrawElement } from "@excalidraw/excalidraw/element/types";
 
 const storedAppStateKeys = ["viewBackgroundColor","gridSize","gridStep","gridModeEnabled","theme","currentItemStrokeColor","currentItemBackgroundColor","currentItemFillStyle","currentItemStrokeWidth","currentItemStrokeStyle","currentItemRoughness","currentItemOpacity","currentItemFontFamily","currentItemFontSize","currentItemTextAlign","currentItemStartArrowhead","currentItemEndArrowhead"] as const;
 export function serializeSceneForStorage(elements:readonly ExcalidrawElement[],appState:AppState,files:BinaryFiles){const stored:Record<string,unknown>={};for(const key of storedAppStateKeys)stored[key]=(appState as any)[key];return{elements,appState:stored,files}}

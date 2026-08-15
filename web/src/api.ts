@@ -9,7 +9,7 @@ async function request<T>(path:string, init?:RequestInit):Promise<T>{
   if(response.status===204)return undefined as T;
   return response.json();
 }
-type DrawingLocation = { space?: SpaceMode; folderId?: string | null; projectId?: string | null; type?: DrawingType };
+type DrawingLocation = { space?: SpaceMode; folderId?: string | null; projectId?: string | null; type?: DrawingType; mermaidCode?: string };
 export const api={
   me:()=>request<User>("/api/me"),
   login:(username:string)=>request<User>("/api/login",{method:"POST",body:JSON.stringify({username})}),

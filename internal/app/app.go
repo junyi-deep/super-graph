@@ -381,11 +381,12 @@ func (a *App) users(w http.ResponseWriter, r *http.Request, u User) {
 
 func (a *App) createDrawing(w http.ResponseWriter, r *http.Request, u User) {
 	var in struct {
-		Name      string  `json:"name"`
-		Space     string  `json:"space"`
-		FolderID  *string `json:"folderId"`
-		ProjectID *string `json:"projectId"`
-		Type      string  `json:"type"`
+		Name        string  `json:"name"`
+		Space       string  `json:"space"`
+		FolderID    *string `json:"folderId"`
+		ProjectID   *string `json:"projectId"`
+		Type        string  `json:"type"`
+		MermaidCode string  `json:"mermaidCode"`
 	}
 	if !decodeJSON(w, r, &in) {
 		return
@@ -414,6 +415,18 @@ func (a *App) createDrawing(w http.ResponseWriter, r *http.Request, u User) {
 	content := emptyScene
 	if in.Type == "mermaid" {
 		content = emptyMermaid
+		if code := strings.TrimSpace(in.MermaidCode); code != "" {
+			if len(code) > 1<<20 {
+				writeError(w, 400, "Mermaid 源码过长")
+				return
+			}
+			document, err := json.Marshal(map[string]string{"code": code, "theme": "default"})
+			if err != nil {
+				writeError(w, 500, "create failed")
+				return
+			}
+			content = string(document)
+		}
 	}
 	_, e := a.db.ExecContext(r.Context(), "INSERT INTO drawings(id,owner_id,name,scene_json,created_at,updated_at,updated_by,space_type,folder_id,project_id,drawing_type) VALUES(?,?,?,?,?,?,?,?,?,?,?)", id, u.ID, in.Name, content, now, now, u.ID, in.Space, in.FolderID, in.ProjectID, in.Type)
 	if e != nil {
