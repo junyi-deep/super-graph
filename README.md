@@ -173,16 +173,18 @@ Visimer 保留 Mermaid 文本作为唯一事实来源，可视化操作会转换
 
 用户名直接登录只是身份标签，不提供强身份验证，仅适用于可信内网。任何人都能输入已有用户名并取得该身份；正式接入不可信网络前应替换为 SSO 或密码认证。
 
-实现包含随机 session token、HttpOnly/SameSite cookie、同源写请求校验、WebSocket 同源校验、参数化 SQL、上传大小限制、PNG 签名检查和 owner 删除权限。部署到 HTTPS 反向代理后正确传递 `X-Forwarded-Proto: https` 时，cookie 会自动设置 `Secure`。
+实现包含随机 session token、HttpOnly/SameSite cookie、参数化 SQL、上传大小限制、PNG 签名检查和 owner 删除权限。为兼容企业代理和 Proxy SwitchyOmega，HTTP API 与协作 WebSocket 不校验 Origin/Referer；因此本服务仍应仅部署在可信内网。部署到 HTTPS 反向代理后正确传递 `X-Forwarded-Proto: https` 时，cookie 会自动设置 `Secure`。
 
-### 反向代理与跨站校验
+### 反向代理
 
-如果反向代理没有保留外部 Host，写请求可能返回 `cross-site request rejected`。请让代理保留原始 Host，或同时传递外部协议与 Host：
+反向代理应保留外部 Host 和协议，并启用 WebSocket Upgrade：
 
 ```nginx
 proxy_set_header Host $host;
 proxy_set_header X-Forwarded-Proto $scheme;
 proxy_set_header X-Forwarded-Host $host;
+proxy_set_header Upgrade $http_upgrade;
+proxy_set_header Connection "upgrade";
 ```
 
-Super Graph 会使用 `X-Forwarded-Proto` 和 `X-Forwarded-Host` 还原浏览器看到的来源。不要通过关闭同源校验来忽略该错误，否则会降低内网站点的跨站请求防护能力。
+Super Graph 使用 `X-Forwarded-Proto` 判断是否为 session cookie 添加 `Secure`；代理软件改写 Origin 或 Referer 不会再阻止登录、写请求或实时协作。

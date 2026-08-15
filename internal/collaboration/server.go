@@ -43,6 +43,7 @@ func New(store persist.Store, auth Authenticator, logger *slog.Logger) Server {
 	s := ygoserver.New(ygoserver.Options{
 		Store:          store,
 		DocNameFn:      func(r *http.Request) string { return strings.TrimPrefix(r.URL.Path, "/api/collaboration/") },
+		OriginPatterns: []string{"*"},
 		ReadLimit:      32 << 20,
 		MaxConnsPerDoc: 128,
 		MaxDocs:        10000,

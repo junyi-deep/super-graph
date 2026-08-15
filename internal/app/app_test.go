@@ -103,32 +103,36 @@ func (c *testClient) autosaveContent(id, scene string, png []byte) int {
 	return resp.StatusCode
 }
 
-func TestSafeRequestSupportsReverseProxyOrigin(t *testing.T) {
-	tests := []struct {
-		name           string
-		origin         string
-		host           string
-		forwardedProto string
-		forwardedHost  string
-		want           bool
-	}{
-		{name: "direct", origin: "http://graph.internal", host: "graph.internal", want: true},
-		{name: "proxy", origin: "https://graph.example.com", host: "127.0.0.1:7988", forwardedProto: "https", forwardedHost: "graph.example.com", want: true},
-		{name: "proxy default port", origin: "https://graph.example.com", host: "127.0.0.1:7988", forwardedProto: "https", forwardedHost: "graph.example.com:443", want: true},
-		{name: "forwarded chain", origin: "https://graph.example.com", host: "127.0.0.1:7988", forwardedProto: "https, http", forwardedHost: "graph.example.com, proxy.local", want: true},
-		{name: "cross site", origin: "https://evil.example", host: "graph.example.com", forwardedProto: "https", forwardedHost: "graph.example.com", want: false},
+func TestProxyOriginDoesNotBlockLoginOrWrites(t *testing.T) {
+	a, s := newTestApp(t, t.TempDir())
+	defer s.Close()
+	defer a.Close()
+	login, _ := http.NewRequest(http.MethodPost, s.URL+"/api/login", strings.NewReader(`{"username":"proxy-user"}`))
+	login.Header.Set("Content-Type", "application/json")
+	login.Header.Set("Origin", "http://proxy-switchyomega.local")
+	login.Header.Set("Referer", "http://proxy-switchyomega.local/login")
+	resp, err := s.Client().Do(login)
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			r := httptest.NewRequest(http.MethodPost, "http://"+test.host+"/api/drawings", nil)
-			r.Host = test.host
-			r.Header.Set("Origin", test.origin)
-			r.Header.Set("X-Forwarded-Proto", test.forwardedProto)
-			r.Header.Set("X-Forwarded-Host", test.forwardedHost)
-			if got := safeRequest(r); got != test.want {
-				t.Fatalf("safeRequest() = %v, want %v", got, test.want)
-			}
-		})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("proxy login: %d %s", resp.StatusCode, body)
+	}
+	cookie := resp.Cookies()[0]
+	create, _ := http.NewRequest(http.MethodPost, s.URL+"/api/drawings", strings.NewReader(`{"name":"through proxy"}`))
+	create.Header.Set("Content-Type", "application/json")
+	create.Header.Set("Origin", "http://proxy-switchyomega.local")
+	create.AddCookie(cookie)
+	resp, err = s.Client().Do(create)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("proxy write: %d %s", resp.StatusCode, body)
 	}
 }
 
