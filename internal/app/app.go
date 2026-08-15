@@ -13,7 +13,6 @@ import (
 	"log/slog"
 	"mime/multipart"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -224,36 +223,8 @@ func (a *App) withUser(w http.ResponseWriter, r *http.Request, next userHandler)
 		writeError(w, http.StatusUnauthorized, "login required")
 		return
 	}
-	if !safeRequest(r) {
-		writeError(w, http.StatusForbidden, "cross-site request rejected")
-		return
-	}
 	a.touchActivity(r.Context(), u.ID)
 	next(w, r, u)
-}
-func safeRequest(r *http.Request) bool {
-	if r.Method == http.MethodGet || r.Method == http.MethodHead || r.Method == http.MethodOptions {
-		return true
-	}
-	origin := r.Header.Get("Origin")
-	if origin == "" {
-		return true
-	}
-	parsed, err := url.Parse(origin)
-	if err != nil || parsed.Scheme == "" || parsed.Host == "" || parsed.User != nil {
-		return false
-	}
-	scheme := requestScheme(r)
-	hosts := []string{r.Host}
-	if forwardedHost := firstForwardedValue(r.Header.Get("X-Forwarded-Host")); forwardedHost != "" {
-		hosts = append(hosts, forwardedHost)
-	}
-	for _, host := range hosts {
-		if sameOrigin(parsed, scheme, host) {
-			return true
-		}
-	}
-	return false
 }
 func requestScheme(r *http.Request) string {
 	if r.TLS != nil || strings.EqualFold(firstForwardedValue(r.Header.Get("X-Forwarded-Proto")), "https") {
@@ -265,24 +236,6 @@ func requestScheme(r *http.Request) string {
 func firstForwardedValue(value string) string {
 	value, _, _ = strings.Cut(value, ",")
 	return strings.Trim(strings.TrimSpace(value), `"`)
-}
-
-func sameOrigin(origin *url.URL, scheme, host string) bool {
-	candidate, err := url.Parse(scheme + "://" + strings.TrimSpace(host))
-	if err != nil {
-		return false
-	}
-	return strings.EqualFold(origin.Scheme, candidate.Scheme) && strings.EqualFold(origin.Hostname(), candidate.Hostname()) && effectivePort(origin) == effectivePort(candidate)
-}
-
-func effectivePort(value *url.URL) string {
-	if port := value.Port(); port != "" {
-		return port
-	}
-	if strings.EqualFold(value.Scheme, "https") {
-		return "443"
-	}
-	return "80"
 }
 
 func (a *App) AuthenticateRequest(r *http.Request) (string, error) {
@@ -309,10 +262,6 @@ func (a *App) currentUser(r *http.Request) (User, error) {
 }
 
 func (a *App) login(w http.ResponseWriter, r *http.Request) {
-	if !safeRequest(r) {
-		writeError(w, 403, "cross-site request rejected")
-		return
-	}
 	var in struct {
 		Username string `json:"username"`
 	}
@@ -489,10 +438,6 @@ func (a *App) drawingRoute(w http.ResponseWriter, r *http.Request) {
 	u, e := a.currentUser(r)
 	if e != nil {
 		writeError(w, 401, "login required")
-		return
-	}
-	if !safeRequest(r) {
-		writeError(w, 403, "cross-site request rejected")
 		return
 	}
 	rest := strings.TrimPrefix(r.URL.Path, "/api/drawings/")

@@ -173,10 +173,6 @@ func (a *App) folderRoute(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 401, "login required")
 		return
 	}
-	if !safeRequest(r) {
-		writeError(w, 403, "cross-site request rejected")
-		return
-	}
 	id := strings.TrimPrefix(r.URL.Path, "/api/folders/")
 	if !drawingIDPattern.MatchString(id) {
 		writeError(w, 404, "目录不存在")
@@ -253,10 +249,6 @@ func (a *App) projectRoute(w http.ResponseWriter, r *http.Request) {
 	u, err := a.currentUser(r)
 	if err != nil {
 		writeError(w, 401, "login required")
-		return
-	}
-	if !safeRequest(r) {
-		writeError(w, 403, "cross-site request rejected")
 		return
 	}
 	id := strings.TrimPrefix(r.URL.Path, "/api/projects/")
