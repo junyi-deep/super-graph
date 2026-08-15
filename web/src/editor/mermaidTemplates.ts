@@ -1,0 +1,26 @@
+export type MermaidTemplate={id:string;name:string;code:string};
+
+export const MERMAID_TEMPLATES:MermaidTemplate[]=[
+  {id:"flowchart",name:"流程图",code:"flowchart TD\n  A[开始] --> B{条件}\n  B -->|是| C[完成]\n  B -->|否| D[重试]"},
+  {id:"sequence",name:"时序图",code:"sequenceDiagram\n  participant U as 用户\n  participant S as 服务\n  U->>S: 请求\n  S-->>U: 响应"},
+  {id:"class",name:"类图",code:"classDiagram\n  class User {\n    +String name\n    +login()\n  }\n  User --> Session"},
+  {id:"state",name:"状态图",code:"stateDiagram-v2\n  [*] --> Draft\n  Draft --> Published: 发布\n  Published --> [*]"},
+  {id:"er",name:"ER 图",code:"erDiagram\n  USER ||--o{ DOCUMENT : creates\n  USER {\n    string id\n    string name\n  }\n  DOCUMENT {\n    string id\n    string title\n  }"},
+  {id:"journey",name:"用户旅程图",code:"journey\n  title 用户旅程\n  section 使用产品\n    登录: 5: 用户\n    创建图表: 4: 用户\n    分享: 5: 用户"},
+  {id:"gantt",name:"甘特图",code:"gantt\n  title 项目计划\n  dateFormat YYYY-MM-DD\n  section 开发\n    设计: a1, 2026-01-01, 3d\n    实现: after a1, 5d"},
+  {id:"pie",name:"饼图",code:"pie showData\n  title 文件类型\n  \"Excalidraw\" : 60\n  \"Mermaid\" : 40"},
+  {id:"quadrant",name:"象限图",code:"quadrantChart\n  title 优先级矩阵\n  x-axis 低投入 --> 高投入\n  y-axis 低价值 --> 高价值\n  quadrant-1 优先执行\n  A: [0.3, 0.8]\n  B: [0.7, 0.4]"},
+  {id:"requirement",name:"需求图",code:"requirementDiagram\n  requirement feature {\n    id: REQ1\n    text: Support collaboration\n    risk: medium\n    verifymethod: test\n  }"},
+  {id:"gitgraph",name:"Git 图",code:"gitGraph\n  commit id: \"init\"\n  branch feature\n  commit id: \"feature\"\n  checkout main\n  merge feature"},
+  {id:"c4",name:"C4 架构图",code:"C4Context\n  Person(user, \"用户\")\n  System(graph, \"Super Graph\")\n  Rel(user, graph, \"创建和分享图表\")"},
+  {id:"mindmap",name:"思维导图",code:"mindmap\n  root((Super Graph))\n    Excalidraw\n      自由绘图\n      实时协作\n    Mermaid\n      文本图表\n      Visimer"},
+  {id:"timeline",name:"时间线",code:"timeline\n  title 产品路线\n  2026 Q1 : 基础画板\n  2026 Q2 : 实时协作\n  2026 Q3 : Mermaid 编辑"},
+  {id:"sankey",name:"桑基图",code:"sankey-beta\nVisits,Login,100\nLogin,Create,80\nCreate,Share,60"},
+  {id:"xychart",name:"XY 图",code:"xychart-beta\n  title \"月度活跃\"\n  x-axis [Jan, Feb, Mar, Apr]\n  y-axis \"Users\" 0 --> 100\n  bar [35, 55, 72, 90]"},
+  {id:"block",name:"块图",code:"block-beta\n  columns 3\n  frontend[\"前端\"]\n  space:1\n  backend[\"后端\"]\n  frontend --> backend\n  backend --> database[(\"数据库\")]"},
+  {id:"packet",name:"数据包图",code:"packet-beta\n  0-15: \"源端口\"\n  16-31: \"目标端口\"\n  32-63: \"序列号\""},
+  {id:"kanban",name:"看板",code:"kanban\n  todo[待处理]\n    task1[整理需求]\n  doing[进行中]\n    task2[实现功能]\n  done[已完成]\n    task3[发布版本]"},
+  {id:"architecture",name:"架构图",code:"architecture-beta\n  service web(internet)[Web]\n  service api(server)[API]\n  service db(database)[Database]\n  web:R -- L:api\n  api:R -- L:db"},
+  {id:"radar",name:"雷达图",code:"radar-beta\n  axis speed[\"速度\"], quality[\"质量\"], cost[\"成本\"]\n  curve product[\"产品\"]{80, 70, 60}\n  max 100"},
+  {id:"treemap",name:"矩形树图",code:"treemap-beta\n  \"图表\"\n    \"Excalidraw\": 60\n    \"Mermaid\": 40"},
+];

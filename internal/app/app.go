@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -238,13 +239,50 @@ func safeRequest(r *http.Request) bool {
 	if origin == "" {
 		return true
 	}
-	return strings.EqualFold(origin, requestScheme(r)+"://"+r.Host)
+	parsed, err := url.Parse(origin)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" || parsed.User != nil {
+		return false
+	}
+	scheme := requestScheme(r)
+	hosts := []string{r.Host}
+	if forwardedHost := firstForwardedValue(r.Header.Get("X-Forwarded-Host")); forwardedHost != "" {
+		hosts = append(hosts, forwardedHost)
+	}
+	for _, host := range hosts {
+		if sameOrigin(parsed, scheme, host) {
+			return true
+		}
+	}
+	return false
 }
 func requestScheme(r *http.Request) string {
-	if r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
+	if r.TLS != nil || strings.EqualFold(firstForwardedValue(r.Header.Get("X-Forwarded-Proto")), "https") {
 		return "https"
 	}
 	return "http"
+}
+
+func firstForwardedValue(value string) string {
+	value, _, _ = strings.Cut(value, ",")
+	return strings.Trim(strings.TrimSpace(value), `"`)
+}
+
+func sameOrigin(origin *url.URL, scheme, host string) bool {
+	candidate, err := url.Parse(scheme + "://" + strings.TrimSpace(host))
+	if err != nil {
+		return false
+	}
+	return strings.EqualFold(origin.Scheme, candidate.Scheme) && strings.EqualFold(origin.Hostname(), candidate.Hostname()) && effectivePort(origin) == effectivePort(candidate)
+}
+
+func effectivePort(value *url.URL) string {
+	if port := value.Port(); port != "" {
+		return port
+	}
+	if strings.EqualFold(value.Scheme, "https") {
+		return "443"
+	}
+	return "80"
 }
 
 func (a *App) AuthenticateRequest(r *http.Request) (string, error) {
