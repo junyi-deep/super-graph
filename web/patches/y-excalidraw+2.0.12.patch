@@ -1,0 +1,45 @@
+diff --git a/node_modules/y-excalidraw/dist/y-excalidraw.js b/node_modules/y-excalidraw/dist/y-excalidraw.js
+index 84ad536..799a149 100644
+--- a/node_modules/y-excalidraw/dist/y-excalidraw.js
++++ b/node_modules/y-excalidraw/dist/y-excalidraw.js
+@@ -29,6 +29,12 @@ var areElementsSame = (els1, els2) => {
+   }
+   return true;
+ };
++var areSelectionsSame = (selection1, selection2) => {
++  const keys1 = Object.keys(selection1 || {});
++  const keys2 = Object.keys(selection2 || {});
++  if (keys1.length !== keys2.length) return false;
++  return keys1.every((key) => selection2?.[key] === selection1[key]);
++};
+ var yjsToExcalidraw = (yArray) => {
+   let x = yArray.toArray().sort((a, b) => {
+     const key1 = a.get("pos");
+@@ -280,7 +286,10 @@ var ExcalidrawBinding = class {
+         if (assetOperations.length > 0) {
+           applyAssetOperations(this.yAssets, assetOperations, this);
+         }
+-        if (this.awareness) {
++        if (this.awareness && !areSelectionsSame(
++          this.awareness.getLocalState()?.selectedElementIds,
++          state.selectedElementIds
++        )) {
+           this.awareness.setLocalStateField(
+             "selectedElementIds",
+             state.selectedElementIds
+@@ -299,11 +308,14 @@ var ExcalidrawBinding = class {
+         return [];
+       }));
+       const remoteElements = yjsToExcalidraw(this.yElements);
++      const existingElements = new Map(
++        this.api.getSceneElements().map((element) => [element.id, element])
++      );
+       const elements = remoteElements.map((el) => {
+         if (changedElementIds.has(el.id)) {
+           return el;
+         }
+-        return this.api.getSceneElements().find((existingEl) => existingEl.id === el.id) || el;
++        return existingElements.get(el.id) || el;
+       });
+       this.lastKnownElements = this.yElements.toArray().map((x) => ({ id: x.get("el").id, version: x.get("el").version, pos: x.get("pos") })).sort((a, b) => {
+         const key1 = a.pos;

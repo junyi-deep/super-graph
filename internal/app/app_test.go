@@ -186,6 +186,16 @@ func (c *testClient) autosaveContent(id, scene string, png []byte) int {
 	return resp.StatusCode
 }
 
+func (c *testClient) autosaveWithoutImage(id, scene string) int {
+	var b bytes.Buffer
+	m := multipart.NewWriter(&b)
+	_ = m.WriteField("scene", scene)
+	_ = m.Close()
+	resp := c.req("PUT", "/api/drawings/"+id+"/autosave", &b, m.FormDataContentType())
+	defer resp.Body.Close()
+	return resp.StatusCode
+}
+
 func TestProxyOriginDoesNotBlockLoginOrWrites(t *testing.T) {
 	a, s := newTestApp(t, t.TempDir())
 	defer s.Close()
@@ -413,6 +423,37 @@ func TestInvalidUploadAndAtomicConcurrentImageReads(t *testing.T) {
 	matches, _ := filepath.Glob(filepath.Join(a.imagesDir, ".*.tmp"))
 	if len(matches) != 0 {
 		t.Fatalf("temporary files remain: %v", matches)
+	}
+}
+
+func TestAutosaveWithoutThumbnailPreservesExistingImage(t *testing.T) {
+	a, s := newTestApp(t, t.TempDir())
+	defer s.Close()
+	defer a.Close()
+	c := tc(t, s)
+	c.login("alice")
+	d := c.create("lightweight autosave")
+	if status := c.autosave(d.ID, pngA); status != http.StatusOK {
+		t.Fatalf("initial autosave: %d", status)
+	}
+	scene := `{"elements":[{"id":"newer"}],"appState":{},"files":{}}`
+	if status := c.autosaveWithoutImage(d.ID, scene); status != http.StatusOK {
+		t.Fatalf("scene-only autosave: %d", status)
+	}
+	resp := c.req("GET", "/api/drawings/"+d.ID, nil, "")
+	defer resp.Body.Close()
+	var saved Drawing
+	if err := json.NewDecoder(resp.Body).Decode(&saved); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(saved.Scene, []byte(`"id":"newer"`)) {
+		t.Fatalf("scene was not updated: %s", saved.Scene)
+	}
+	imageResp := c.req("GET", "/image/"+d.ID+".png", nil, "")
+	defer imageResp.Body.Close()
+	image, _ := io.ReadAll(imageResp.Body)
+	if !bytes.Equal(image, pngA) {
+		t.Fatalf("scene-only autosave replaced thumbnail: %q", image)
 	}
 }
 

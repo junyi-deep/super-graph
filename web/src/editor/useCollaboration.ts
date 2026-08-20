@@ -34,6 +34,7 @@ export function useCollaboration(
   >();
   const [connected, setConnected] = useState(false);
   const [users, setUsers] = useState<CollaboratorUser[]>([]);
+  const [isSnapshotLeader, setIsSnapshotLeader] = useState(false);
   useEffect(() => {
     if (!api || !root.current) return;
     const doc = new Y.Doc();
@@ -59,9 +60,12 @@ export function useCollaboration(
       colorLight: color + "33",
       role: canEdit ? "edit" : "view",
     });
+    let lastUsersSignature = "";
     const updateUsers = () => {
       const unique = new Map<string, CollaboratorUser>();
-      for (const state of provider.awareness.getStates().values()) {
+      const editableClients: number[] = [];
+      for (const [clientID, state] of provider.awareness.getStates()) {
+        if (state.user?.role === "edit") editableClients.push(clientID);
         if (state.user?.userId)
           unique.set(state.user.userId, {
             id: state.user.userId,
@@ -70,9 +74,42 @@ export function useCollaboration(
             self: state.user.userId === user.id,
           });
       }
-      setUsers([...unique.values()]);
+      const nextUsers = [...unique.values()];
+      const nextSignature = nextUsers
+        .map((item) => `${item.id}:${item.username}:${item.color}:${item.self}`)
+        .sort()
+        .join("|");
+      if (nextSignature !== lastUsersSignature) {
+        lastUsersSignature = nextSignature;
+        setUsers(nextUsers);
+      }
+      setIsSnapshotLeader(
+        canEdit &&
+          editableClients.length > 0 &&
+          provider.awareness.clientID === Math.min(...editableClients),
+      );
     };
     let binding: ExcalidrawBinding | undefined;
+    let pointerTimer: number | undefined;
+    let pendingPointer: any;
+    const publishPointer = () => {
+      pointerTimer = undefined;
+      if (!pendingPointer) return;
+      const current = provider.awareness.getLocalState() || {};
+      provider.awareness.setLocalState({
+        ...current,
+        pointer: pendingPointer.pointer,
+        button: pendingPointer.button,
+      });
+      pendingPointer = undefined;
+    };
+    const onPointerUpdate = (payload: any) => {
+      pendingPointer = payload;
+      // Remote cursors do not need mouse-event frequency. One combined update at
+      // ~30 FPS avoids two awareness broadcasts per pointer event.
+      if (pointerTimer === undefined)
+        pointerTimer = window.setTimeout(publishPointer, 33);
+    };
     const onStatus = ({ status }: { status: string }) =>
       setConnected(status === "connected");
     provider.on("status", onStatus);
@@ -106,19 +143,21 @@ export function useCollaboration(
         api,
         provider.awareness,
       );
-      setPointerHandler(() => binding!.onPointerUpdate);
+      setPointerHandler(() => onPointerUpdate);
     };
     provider.on("sync", onSync);
     return () => {
       provider.off("sync", onSync);
       provider.off("status", onStatus);
       provider.awareness.off("change", updateUsers);
+      if (pointerTimer !== undefined) window.clearTimeout(pointerTimer);
       binding?.destroy();
       provider.destroy();
       doc.destroy();
       setPointerHandler(undefined);
       setUsers([]);
+      setIsSnapshotLeader(false);
     };
   }, [id, user.id, user.username, api, canEdit]);
-  return { onPointerUpdate: pointerHandler, connected, users };
+  return { onPointerUpdate: pointerHandler, connected, users, isSnapshotLeader };
 }

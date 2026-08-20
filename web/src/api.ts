@@ -180,10 +180,10 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify({ items }),
     }),
-  autosave: (id: string, scene: unknown, image: Blob) => {
+  autosave: (id: string, scene: unknown, image?: Blob) => {
     const form = new FormData();
     form.append("scene", JSON.stringify(scene));
-    form.append("image", image, "drawing.png");
+    if (image) form.append("image", image, "drawing.png");
     return request<{ savedAt: number }>(`/api/drawings/${id}/autosave`, {
       method: "PUT",
       body: form,

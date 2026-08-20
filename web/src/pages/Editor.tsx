@@ -18,7 +18,6 @@ import { ShareDialog } from "../components/ShareDialog";
 import type { Drawing, Scene, User } from "../types";
 import { AutosaveCoordinator, type SaveStatus } from "../editor/autosave";
 import {
-  contentSignature,
   restoreSceneFromStorage,
   serializeSceneForStorage,
 } from "../editor/scene";
@@ -74,7 +73,11 @@ function ExcalidrawEditor({ initial, user }: { initial: Drawing; user: User }) {
     appState: any;
     files: BinaryFiles;
   } | null>(null);
-  const signature = useRef<string>();
+  const lastContent = useRef<{
+    elements: readonly ExcalidrawElement[];
+    files: BinaryFiles;
+  }>();
+  const lastThumbnailAt = useRef(0);
   const autosaver = useMemo(() => new AutosaveCoordinator(setStatus), []);
   const scene = (drawing.scene ?? {
     elements: [],
@@ -83,13 +86,18 @@ function ExcalidrawEditor({ initial, user }: { initial: Drawing; user: User }) {
   }) as Scene;
   const collab = useCollaboration(id, user, apiRef, scene, root, canEdit);
   useEffect(() => {
+    if (collab.isSnapshotLeader && latest.current) autosaver.markChanged();
+  }, [collab.isSnapshotLeader, autosaver]);
+  useEffect(() => {
     if (!apiRef) return;
     let interval: number;
+    let cancelled = false;
     api.config().then((config) => {
+      if (cancelled) return;
       interval = window.setInterval(
         () =>
           autosaver.run(async () => {
-            if (!canEdit) return;
+            if (!canEdit || !collab.isSnapshotLeader) return;
             const current = latest.current;
             if (!current) return;
             const stored = serializeSceneForStorage(
@@ -97,23 +105,31 @@ function ExcalidrawEditor({ initial, user }: { initial: Drawing; user: User }) {
               current.appState,
               current.files,
             );
-            const image = await exportToBlob({
-              elements: current.elements,
-              appState: {
-                ...current.appState,
-                exportScale: Math.min(current.appState.exportScale || 1, 2),
-              },
-              files: current.files,
-              mimeType: "image/png",
-              maxWidthOrHeight: 8192,
-            });
+            let image: Blob | undefined;
+            const now = Date.now();
+            if (now - lastThumbnailAt.current >= 30_000) {
+              image = await exportToBlob({
+                elements: current.elements,
+                appState: {
+                  ...current.appState,
+                  exportScale: Math.min(current.appState.exportScale || 1, 1.5),
+                },
+                files: current.files,
+                mimeType: "image/png",
+                maxWidthOrHeight: 4096,
+              });
+            }
             await api.autosave(id, stored, image);
+            if (image) lastThumbnailAt.current = now;
           }),
         Math.max(config.autosaveIntervalMs, 1000),
       );
     });
-    return () => clearInterval(interval);
-  }, [apiRef, id, autosaver, canEdit]);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [apiRef, id, autosaver, canEdit, collab.isSnapshotLeader]);
   const onChange = (
     elements: readonly ExcalidrawElement[],
     appState: any,
@@ -121,14 +137,16 @@ function ExcalidrawEditor({ initial, user }: { initial: Drawing; user: User }) {
   ) => {
     if (!canEdit) return;
     latest.current = { elements, appState, files };
-    const next = contentSignature(elements, files);
-    if (signature.current === undefined) {
-      signature.current = next;
+    if (lastContent.current === undefined) {
+      lastContent.current = { elements, files };
       return;
     }
-    if (next !== signature.current) {
-      signature.current = next;
-      autosaver.markChanged();
+    if (
+      elements !== lastContent.current.elements ||
+      files !== lastContent.current.files
+    ) {
+      lastContent.current = { elements, files };
+      if (collab.isSnapshotLeader) autosaver.markChanged();
     }
   };
   const beginNameEdit = () => {

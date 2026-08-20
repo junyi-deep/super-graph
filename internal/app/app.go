@@ -698,24 +698,25 @@ func (a *App) autosave(w http.ResponseWriter, r *http.Request, u User, id string
 		return
 	}
 	file, h, e := r.FormFile("image")
-	if e != nil {
-		writeError(w, 400, "PNG image is required")
-		return
-	}
-	defer file.Close()
-	if h.Header.Get("Content-Type") != "image/png" {
-		writeError(w, 400, "image must be image/png")
-		return
-	}
-	tmp, e := a.writePNGTemp(id, file)
-	if e != nil {
-		a.log.Error("autosave image failed", "drawing", id, "error", e)
-		writeError(w, 400, "invalid PNG image")
-		return
-	}
-	defer os.Remove(tmp)
-	if e = os.Rename(tmp, a.imagePath(id)); e != nil {
-		writeError(w, 500, "save image failed")
+	if e == nil {
+		defer file.Close()
+		if h.Header.Get("Content-Type") != "image/png" {
+			writeError(w, 400, "image must be image/png")
+			return
+		}
+		tmp, writeErr := a.writePNGTemp(id, file)
+		if writeErr != nil {
+			a.log.Error("autosave image failed", "drawing", id, "error", writeErr)
+			writeError(w, 400, "invalid PNG image")
+			return
+		}
+		defer os.Remove(tmp)
+		if e = os.Rename(tmp, a.imagePath(id)); e != nil {
+			writeError(w, 500, "save image failed")
+			return
+		}
+	} else if !errors.Is(e, http.ErrMissingFile) {
+		writeError(w, 400, "invalid image upload")
 		return
 	}
 	now := time.Now().UnixMilli()
